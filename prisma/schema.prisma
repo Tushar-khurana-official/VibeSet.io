@@ -1,0 +1,91 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum OrderStatus {
+  PLACED
+  PREPARING
+  READY
+  DELIVERED
+  CANCELLED
+}
+
+model Customer {
+  id           String        @id @default(uuid())
+  phone        String        @unique // E.164 phone number, e.g., 919876543210
+  name         String?
+  language     String        @default("en") // "en" | "hi"
+  optedIn      Boolean       @default(true) // STOP sets to false
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  orders       Order[]
+  messages     Message[]
+  conversation Conversation?
+
+  @@index([phone])
+}
+
+model Order {
+  id              String      @id @default(uuid())
+  orderNumber     String      @unique // e.g. ORD-1001
+  customerId      String
+  customer        Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  status          OrderStatus @default(PLACED)
+  totalAmount     Float
+  deliveryAddress String
+  notes           String?
+  items           OrderItem[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([customerId])
+  @@index([status])
+}
+
+model OrderItem {
+  id        String @id @default(uuid())
+  orderId   String
+  order     Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemId    String // e.g. dish_01
+  itemName  String
+  price     Float
+  quantity  Int
+
+  @@index([orderId])
+}
+
+model Message {
+  id          String   @id @default(uuid())
+  messageId   String?  @unique // Meta wa_id / wamid for deduplication (idempotency)
+  customerId  String?
+  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  sender      String   // Phone or SYSTEM
+  direction   String   // "INBOUND" or "OUTBOUND"
+  type        String   // "text", "interactive_list", "interactive_button", "template"
+  body        String?  // Text content or readable summary
+  rawPayload  Json?    // Complete raw Meta JSON
+  createdAt   DateTime @default(now())
+
+  @@index([messageId])
+  @@index([customerId])
+}
+
+model Conversation {
+  id              String    @id @default(uuid())
+  customerId      String    @unique
+  customer        Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  state           String    @default("MAIN_MENU") // MAIN_MENU, BROWSING, SELECT_ITEM, QUANTITY, ADDRESS, CONFIRM, DONE
+  isBotPaused     Boolean   @default(false)       // true when customer asks for "agent"
+  pausedAt        DateTime?
+  lastInteraction DateTime  @default(now())
+  contextData     Json?                           // stores pending order draft, items, etc.
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([customerId])
+}

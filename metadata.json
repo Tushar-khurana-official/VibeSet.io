@@ -1,0 +1,6 @@
+{
+  "name": "WhatsApp Business Chatbot",
+  "description": "Production-grade WhatsApp Business automated assistant with webhook verification, interactive menus, order management, and multi-language support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
