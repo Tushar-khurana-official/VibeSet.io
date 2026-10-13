@@ -13,6 +13,15 @@ export function t(key: string, lang: Language = 'en', params?: Record<string, st
   const selectedLang = translations[lang] ? lang : 'en';
   let message = translations[selectedLang][key] || translations['en'][key] || key;
 
+  // Check for dynamic custom welcome message overrides
+  if (key === 'welcome_new') {
+    if (selectedLang === 'hi' && businessConfig.welcomeMessageHi) {
+      message = businessConfig.welcomeMessageHi;
+    } else if (businessConfig.welcomeMessageEn) {
+      message = businessConfig.welcomeMessageEn;
+    }
+  }
+
   // Global business parameters
   const mergedParams: Record<string, string | number> = {
     businessName: businessConfig.name,

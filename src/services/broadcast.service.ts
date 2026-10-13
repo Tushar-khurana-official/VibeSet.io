@@ -3,6 +3,8 @@ import { whatsappService } from './whatsapp.service';
 import { logger } from '../utils/logger';
 
 export interface BroadcastResult {
+  id: string;
+  templateName: string;
   totalTargeted: number;
   sentCount: number;
   skippedUnsubscribed: number;
@@ -12,6 +14,21 @@ export interface BroadcastResult {
 
 class BroadcastService {
   private isBroadcasting = false;
+  private history: BroadcastResult[] = [
+    {
+      id: "bc-init-1",
+      templateName: "weekend_special_offer",
+      totalTargeted: 1,
+      sentCount: 1,
+      skippedUnsubscribed: 0,
+      failedCount: 0,
+      timestamp: new Date(Date.now() - 3600000 * 24).toISOString()
+    }
+  ];
+
+  getBroadcastHistory(): BroadcastResult[] {
+    return [...this.history].reverse();
+  }
 
   async sendBroadcast(params: {
     templateName: string;
@@ -56,13 +73,18 @@ class BroadcastService {
 
       logger.info(`Broadcast completed: ${sentCount} sent, ${skippedUnsubscribed} skipped, ${failedCount} failed`);
 
-      return {
+      const result: BroadcastResult = {
+        id: `bc-${Date.now()}`,
+        templateName: params.templateName,
         totalTargeted: customers.length,
         sentCount,
         skippedUnsubscribed,
         failedCount,
         timestamp: new Date().toISOString()
       };
+
+      this.history.push(result);
+      return result;
     } finally {
       this.isBroadcasting = false;
     }

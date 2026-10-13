@@ -3,7 +3,6 @@ import {
   Send,
   Smartphone,
   CheckCheck,
-  Clock,
   Store,
   Users,
   ShoppingBag,
@@ -15,18 +14,26 @@ import {
   Copy,
   Check,
   RotateCcw,
-  AlertTriangle,
   Globe,
   RefreshCw,
   Play,
   CheckCircle2,
-  PhoneCall,
-  UserCheck,
   ChevronRight,
   ExternalLink,
-  MessageSquare
+  MessageSquare,
+  Plus,
+  Trash2,
+  Edit2,
+  Save,
+  Search,
+  UserX,
+  MessageCircle,
+  PauseCircle,
+  PlayCircle,
+  Sliders,
+  DollarSign
 } from 'lucide-react';
-import { businessConfig, envConfig } from './config';
+import { businessConfig as defaultBusinessConfig, envConfig, MenuItem } from './config';
 
 interface ChatMessage {
   id: string;
@@ -38,7 +45,11 @@ interface ChatMessage {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'simulator' | 'webhook' | 'admin' | 'guide' | 'samples'>('simulator');
+  const [activeTab, setActiveTab] = useState<
+    'simulator' | 'orders' | 'customers' | 'broadcast' | 'settings' | 'webhook' | 'samples' | 'guide'
+  >('simulator');
+
+  // Customer simulator state
   const [phone, setPhone] = useState('919876543210');
   const [customerName, setCustomerName] = useState('Tushar');
   const [inputMessage, setInputMessage] = useState('');
@@ -46,14 +57,59 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [selectedListSection, setSelectedListSection] = useState<any | null>(null);
 
-  // Admin state
+  // Admin and Data state
   const [adminOrders, setAdminOrders] = useState<any[]>([]);
   const [adminCustomers, setAdminCustomers] = useState<any[]>([]);
   const [adminConversations, setAdminConversations] = useState<any[]>([]);
-  const [adminMessages, setAdminMessages] = useState<any[]>([]);
   const [adminApiKey, setAdminApiKey] = useState(envConfig.adminApiKey || 'wh_admin_secret_key_prod_2026');
+
+  // Settings & Config state
+  const [businessSettings, setBusinessSettings] = useState({
+    name: defaultBusinessConfig.name,
+    category: defaultBusinessConfig.category,
+    tagline: defaultBusinessConfig.tagline,
+    currency: defaultBusinessConfig.currency,
+    hours: defaultBusinessConfig.hours,
+    address: defaultBusinessConfig.address,
+    supportPhone: defaultBusinessConfig.supportPhone,
+    website: defaultBusinessConfig.website,
+    welcomeMessageEn: defaultBusinessConfig.welcomeMessageEn || '',
+    welcomeMessageHi: defaultBusinessConfig.welcomeMessageHi || '',
+    menuItems: [...defaultBusinessConfig.menuItems]
+  });
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
+  const [configSaveSuccess, setConfigSaveSuccess] = useState(false);
+  const [metaCredentials, setMetaCredentials] = useState({
+    whatsappToken: '',
+    phoneNumberId: envConfig.phoneNumberId || '',
+    hasLiveToken: false
+  });
+
+  // Menu editor modal/form state
+  const [editingMenuItem, setEditingMenuItem] = useState<MenuItem | null>(null);
+  const [isAddingNewItem, setIsAddingNewItem] = useState(false);
+  const [newItemForm, setNewItemForm] = useState<Partial<MenuItem>>({
+    id: '',
+    title: '',
+    description: '',
+    price: 150,
+    category: 'Main Course'
+  });
+
+  // Customer page filter and direct messaging state
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [customerFilter, setCustomerFilter] = useState<'all' | 'subscribed' | 'unsubscribed' | 'paused'>('all');
+  const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
+  const [directMessageText, setDirectMessageText] = useState('');
+  const [isSendingDirectMessage, setIsSendingDirectMessage] = useState(false);
+
+  // Broadcast state
   const [broadcastTemplate, setBroadcastTemplate] = useState('seasonal_offer');
+  const [broadcastLang, setBroadcastLang] = useState('en_US');
+  const [broadcastDelay, setBroadcastDelay] = useState(500);
+  const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [broadcastStatus, setBroadcastStatus] = useState<string | null>(null);
+  const [broadcastHistory, setBroadcastHistory] = useState<any[]>([]);
 
   // Webhook Test state
   const [webhookVerifyToken, setWebhookVerifyToken] = useState(envConfig.verifyToken);
@@ -114,30 +170,37 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
-  // Fetch admin data periodically or when switching tabs
-  const fetchAdminData = async () => {
+  // Fetch admin and business config data
+  const fetchAllData = async () => {
     try {
       const headers = { 'X-Admin-Api-Key': adminApiKey };
-      const [ordRes, custRes, convRes, msgRes] = await Promise.all([
+      const [ordRes, custRes, convRes, cfgRes, bcRes] = await Promise.all([
         fetch('/api/admin/orders', { headers }).then((r) => r.json()),
         fetch('/api/admin/customers', { headers }).then((r) => r.json()),
         fetch('/api/admin/conversations', { headers }).then((r) => r.json()),
-        fetch('/api/admin/messages', { headers }).then((r) => r.json())
+        fetch('/api/admin/config', { headers }).then((r) => r.json()),
+        fetch('/api/admin/broadcast/history', { headers }).then((r) => r.json()).catch(() => ({ data: [] }))
       ]);
 
       if (ordRes.data) setAdminOrders(ordRes.data);
       if (custRes.data) setAdminCustomers(custRes.data);
       if (convRes.data) setAdminConversations(convRes.data);
-      if (msgRes.data) setAdminMessages(msgRes.data);
+      if (cfgRes.data) {
+        setBusinessSettings(cfgRes.data);
+        setMetaCredentials((prev) => ({
+          ...prev,
+          phoneNumberId: cfgRes.data.phoneNumberId || prev.phoneNumberId,
+          hasLiveToken: Boolean(cfgRes.data.hasLiveToken)
+        }));
+      }
+      if (bcRes.data) setBroadcastHistory(bcRes.data);
     } catch (e) {
-      console.warn('Could not fetch admin data', e);
+      console.warn('Could not fetch data', e);
     }
   };
 
   useEffect(() => {
-    if (activeTab === 'admin') {
-      fetchAdminData();
-    }
+    fetchAllData();
   }, [activeTab]);
 
   // Initial welcome greeting in simulator
@@ -148,12 +211,12 @@ export default function App() {
           id: 'init-1',
           sender: 'bot',
           type: 'text',
-          text: `👋 Welcome to *${businessConfig.name}*!\n${businessConfig.tagline}\n\nType *hi* or *menu* to explore our options!`,
+          text: `👋 Welcome to *${businessSettings.name}*!\n${businessSettings.tagline}\n\nType *hi* or *menu* to explore our options!`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
       ]);
     }
-  }, []);
+  }, [businessSettings.name]);
 
   // Send message through simulator into webhook receiver
   const sendSimulatorMessage = async (text: string, interactivePayload?: any) => {
@@ -243,7 +306,7 @@ export default function App() {
       });
       const data = await res.json();
       if (data.success) {
-        fetchAdminData();
+        fetchAllData();
       }
     } catch (err) {
       console.error('Failed to update order status', err);
@@ -260,14 +323,152 @@ export default function App() {
         },
         body: JSON.stringify({ customerId })
       });
-      fetchAdminData();
+      fetchAllData();
     } catch (err) {
       console.error('Failed to resume bot', err);
     }
   };
 
+  const handlePauseBot = async (customerId: string) => {
+    try {
+      await fetch('/api/admin/pause-bot', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-Api-Key': adminApiKey
+        },
+        body: JSON.stringify({ customerId })
+      });
+      fetchAllData();
+    } catch (err) {
+      console.error('Failed to pause bot', err);
+    }
+  };
+
+  const handleToggleOptIn = async (customerId: string, currentOptedIn: boolean) => {
+    try {
+      await fetch(`/api/admin/customers/${customerId}/opt-in`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-Api-Key': adminApiKey
+        },
+        body: JSON.stringify({ optedIn: !currentOptedIn })
+      });
+      fetchAllData();
+    } catch (err) {
+      console.error('Failed to toggle opt-in', err);
+    }
+  };
+
+  const handleChangeLanguage = async (customerId: string, language: 'en' | 'hi') => {
+    try {
+      await fetch(`/api/admin/customers/${customerId}/language`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-Api-Key': adminApiKey
+        },
+        body: JSON.stringify({ language })
+      });
+      fetchAllData();
+    } catch (err) {
+      console.error('Failed to update customer language', err);
+    }
+  };
+
+  const handleSendDirectMessage = async () => {
+    if (!selectedCustomer || !directMessageText.trim()) return;
+    setIsSendingDirectMessage(true);
+    try {
+      await fetch(`/api/admin/customers/${selectedCustomer.id}/message`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-Api-Key': adminApiKey
+        },
+        body: JSON.stringify({ text: directMessageText.trim() })
+      });
+      setDirectMessageText('');
+      fetchAllData();
+    } catch (err) {
+      console.error('Failed to send direct message', err);
+    } finally {
+      setIsSendingDirectMessage(false);
+    }
+  };
+
+  const handleSaveBusinessSettings = async () => {
+    setIsSavingConfig(true);
+    setConfigSaveSuccess(false);
+    try {
+      const res = await fetch('/api/admin/config', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-Api-Key': adminApiKey
+        },
+        body: JSON.stringify({
+          ...businessSettings,
+          whatsappToken: metaCredentials.whatsappToken ? metaCredentials.whatsappToken.trim() : undefined,
+          phoneNumberId: metaCredentials.phoneNumberId ? metaCredentials.phoneNumberId.trim() : undefined
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setConfigSaveSuccess(true);
+        fetchAllData();
+        setTimeout(() => setConfigSaveSuccess(false), 3000);
+      }
+    } catch (err) {
+      console.error('Failed to save business settings', err);
+    } finally {
+      setIsSavingConfig(false);
+    }
+  };
+
+  const handleAddMenuItem = () => {
+    if (!newItemForm.title || !newItemForm.price) return;
+    const newItem: MenuItem = {
+      id: newItemForm.id || `item_${Date.now().toString(36)}`,
+      title: newItemForm.title,
+      description: newItemForm.description || '',
+      price: Number(newItemForm.price),
+      category: newItemForm.category || 'General'
+    };
+    setBusinessSettings((prev) => ({
+      ...prev,
+      menuItems: [...prev.menuItems, newItem]
+    }));
+    setIsAddingNewItem(false);
+    setNewItemForm({
+      id: '',
+      title: '',
+      description: '',
+      price: 150,
+      category: 'Main Course'
+    });
+  };
+
+  const handleDeleteMenuItem = (itemId: string) => {
+    setBusinessSettings((prev) => ({
+      ...prev,
+      menuItems: prev.menuItems.filter((i) => i.id !== itemId)
+    }));
+  };
+
+  const handleUpdateMenuItem = () => {
+    if (!editingMenuItem) return;
+    setBusinessSettings((prev) => ({
+      ...prev,
+      menuItems: prev.menuItems.map((i) => (i.id === editingMenuItem.id ? editingMenuItem : i))
+    }));
+    setEditingMenuItem(null);
+  };
+
   const handleTriggerBroadcast = async () => {
-    setBroadcastStatus('Sending broadcast...');
+    setIsBroadcasting(true);
+    setBroadcastStatus('Broadcasting campaign in progress...');
     try {
       const res = await fetch('/api/admin/broadcast', {
         method: 'POST',
@@ -275,18 +476,25 @@ export default function App() {
           'Content-Type': 'application/json',
           'X-Admin-Api-Key': adminApiKey
         },
-        body: JSON.stringify({ templateName: broadcastTemplate, delayMs: 400 })
+        body: JSON.stringify({
+          templateName: broadcastTemplate,
+          language: broadcastLang,
+          delayMs: broadcastDelay
+        })
       });
       const data = await res.json();
       if (data.success) {
         setBroadcastStatus(
-          `Broadcast sent to ${data.data.sentCount} opted-in customers (${data.data.skippedUnsubscribed} skipped)!`
+          `Campaign dispatched successfully! Sent: ${data.data.sentCount}, Skipped: ${data.data.skippedUnsubscribed}, Failed: ${data.data.failedCount}`
         );
+        fetchAllData();
       } else {
-        setBroadcastStatus(`Failed: ${data.error}`);
+        setBroadcastStatus(`Broadcast failed: ${data.error}`);
       }
     } catch (e: any) {
       setBroadcastStatus(`Error: ${e.message}`);
+    } finally {
+      setIsBroadcasting(false);
     }
   };
 
@@ -311,40 +519,7 @@ export default function App() {
 
   const testPostWebhookPayload = async () => {
     try {
-      let bodyToPost = customWebhookPayload;
-      if (!bodyToPost) {
-        bodyToPost = JSON.stringify(
-          {
-            object: 'whatsapp_business_account',
-            entry: [
-              {
-                id: 'WHATSAPP_BUSINESS_ACCOUNT_ID',
-                changes: [
-                  {
-                    value: {
-                      messaging_product: 'whatsapp',
-                      contacts: [{ profile: { name: 'Tushar' }, wa_id: phone }],
-                      messages: [
-                        {
-                          from: phone,
-                          id: `wamid.TEST${Date.now()}`,
-                          timestamp: String(Math.floor(Date.now() / 1000)),
-                          type: 'text',
-                          text: { body: 'hi' }
-                        }
-                      ]
-                    },
-                    field: 'messages'
-                  }
-                ]
-              }
-            ]
-          },
-          null,
-          2
-        );
-      }
-
+      const bodyToPost = customWebhookPayload || sampleIncomingText;
       const res = await fetch('/webhook', {
         method: 'POST',
         headers: {
@@ -363,18 +538,34 @@ export default function App() {
     }
   };
 
+  // Filtered customer list
+  const filteredCustomers = adminCustomers.filter((cust) => {
+    const matchesSearch =
+      cust.phone.includes(customerSearch) || (cust.name && cust.name.toLowerCase().includes(customerSearch.toLowerCase()));
+    if (!matchesSearch) return false;
+
+    const conv = adminConversations.find((c) => c.customerId === cust.id);
+    if (customerFilter === 'subscribed') return cust.optedIn;
+    if (customerFilter === 'unsubscribed') return !cust.optedIn;
+    if (customerFilter === 'paused') return conv?.isBotPaused;
+    return true;
+  });
+
+  const optedInCount = adminCustomers.filter((c) => c.optedIn).length;
+  const optedOutCount = adminCustomers.filter((c) => !c.optedIn).length;
+
   return (
     <div className="flex h-screen w-full bg-slate-950 text-slate-100 font-sans antialiased overflow-hidden">
       {/* Sidebar Navigation */}
-      <aside className="w-64 border-r border-slate-800 bg-slate-900/80 flex flex-col justify-between shrink-0">
+      <aside className="w-64 border-r border-slate-800 bg-slate-900/90 flex flex-col justify-between shrink-0">
         <div>
           <div className="p-4 border-b border-slate-800 flex items-center space-x-3">
             <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
               <MessageSquare className="w-5 h-5" />
             </div>
-            <div>
-              <h1 className="font-semibold text-sm text-slate-100 tracking-tight">WhatsApp Bot</h1>
-              <p className="text-xs text-emerald-400 font-mono">Meta Cloud API</p>
+            <div className="overflow-hidden">
+              <h1 className="font-semibold text-sm text-slate-100 tracking-tight truncate">{businessSettings.name}</h1>
+              <p className="text-xs text-emerald-400 font-mono">WhatsApp Cloud API</p>
             </div>
           </div>
 
@@ -392,50 +583,102 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setActiveTab('webhook')}
+              onClick={() => setActiveTab('orders')}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                activeTab === 'orders'
+                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <div className="flex items-center space-x-3">
+                <ShoppingBag className="w-4 h-4" />
+                <span>Orders</span>
+              </div>
+              {adminOrders.length > 0 && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 font-mono">
+                  {adminOrders.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setActiveTab('customers')}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                activeTab === 'customers'
+                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <div className="flex items-center space-x-3">
+                <Users className="w-4 h-4" />
+                <span>Customers</span>
+              </div>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono">
+                {adminCustomers.length}
+              </span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('broadcast')}
               className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                activeTab === 'webhook'
+                activeTab === 'broadcast'
                   ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/30'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
               <Radio className="w-4 h-4" />
+              <span>Broadcast Campaign</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('settings')}
+              className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                activeTab === 'settings'
+                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Sliders className="w-4 h-4" />
+              <span>Auto-Reply & Settings</span>
+            </button>
+
+            <div className="pt-2 pb-1 border-t border-slate-800/60 my-1">
+              <span className="px-3 text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Developer</span>
+            </div>
+
+            <button
+              onClick={() => setActiveTab('webhook')}
+              className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                activeTab === 'webhook'
+                  ? 'bg-emerald-600 text-white'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Terminal className="w-3.5 h-3.5" />
               <span>Webhook Inspector</span>
             </button>
 
             <button
-              onClick={() => setActiveTab('admin')}
-              className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                activeTab === 'admin'
-                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/30'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-              }`}
-            >
-              <Store className="w-4 h-4" />
-              <span>Orders & Admin</span>
-            </button>
-
-            <button
               onClick={() => setActiveTab('samples')}
-              className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+              className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
                 activeTab === 'samples'
-                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/30'
+                  ? 'bg-emerald-600 text-white'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
-              <FileCode className="w-4 h-4" />
+              <FileCode className="w-3.5 h-3.5" />
               <span>Payload JSONs</span>
             </button>
 
             <button
               onClick={() => setActiveTab('guide')}
-              className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+              className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
                 activeTab === 'guide'
-                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/30'
+                  ? 'bg-emerald-600 text-white'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
-              <ShieldCheck className="w-4 h-4" />
+              <ShieldCheck className="w-3.5 h-3.5" />
               <span>Setup & Test Plan</span>
             </button>
           </nav>
@@ -470,11 +713,11 @@ export default function App() {
         {/* Top bar */}
         <header className="h-14 border-b border-slate-800 bg-slate-950 px-6 flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <span className="font-medium text-sm text-slate-200">{businessConfig.name}</span>
-            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-mono">
-              Ready
+            <span className="font-semibold text-sm text-slate-100">{businessSettings.name}</span>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-mono capitalize">
+              {businessSettings.category}
             </span>
-            <span className="text-xs text-slate-400">Port 3000</span>
+            <span className="text-xs text-slate-400">{businessSettings.menuItems.length} menu items</span>
           </div>
 
           <div className="flex items-center space-x-3 text-xs">
@@ -488,11 +731,20 @@ export default function App() {
               <ExternalLink className="w-3 h-3" />
             </a>
             <div className="h-4 w-px bg-slate-800" />
-            <span className="text-slate-400 font-mono">Verify Token: {envConfig.verifyToken}</span>
+            <button
+              onClick={fetchAllData}
+              className="text-slate-400 hover:text-slate-200 flex items-center space-x-1"
+              title="Refresh all data"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Refresh</span>
+            </button>
           </div>
         </header>
 
-        {/* Tab 1: Live Interactive WhatsApp Simulator */}
+        {/* ============================================================== */}
+        {/* Tab 1: Live Interactive WhatsApp Simulator                     */}
+        {/* ============================================================== */}
         {activeTab === 'simulator' && (
           <div className="flex-1 flex overflow-hidden p-6 gap-6 justify-center items-center bg-slate-950">
             {/* Phone Container */}
@@ -511,11 +763,11 @@ export default function App() {
               <div className="bg-emerald-800 px-4 py-3 flex items-center justify-between text-white shadow-md">
                 <div className="flex items-center space-x-3">
                   <div className="w-9 h-9 rounded-full bg-emerald-600 border border-emerald-400 flex items-center justify-center font-bold text-sm">
-                    SG
+                    {businessSettings.name.slice(0, 2).toUpperCase()}
                   </div>
                   <div>
                     <div className="text-sm font-semibold leading-tight flex items-center space-x-1">
-                      <span>{businessConfig.name}</span>
+                      <span>{businessSettings.name}</span>
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" />
                     </div>
                     <div className="text-[11px] text-emerald-200">Official Business Account</div>
@@ -545,7 +797,7 @@ export default function App() {
               >
                 {/* Security encryption pill */}
                 <div className="bg-slate-800/80 text-[10px] text-amber-300/80 rounded-md p-1.5 text-center shadow-sm">
-                  🔒 Messages are end-to-end encrypted. Meta Cloud API Free Sandbox.
+                  🔒 Messages are end-to-end encrypted. Meta Cloud API Sandbox.
                 </div>
 
                 {chatMessages.map((msg) => {
@@ -608,7 +860,7 @@ export default function App() {
                 {isLoading && (
                   <div className="flex items-center space-x-1 text-slate-400 text-xs italic pl-2">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span>Spice Garden Bot is typing...</span>
+                    <span>{businessSettings.name} is typing...</span>
                   </div>
                 )}
                 <div ref={chatEndRef} />
@@ -684,12 +936,12 @@ export default function App() {
               </form>
             </div>
 
-            {/* Quick Actions & Quick Scripts Panel */}
+            {/* Quick Actions & Customer Controls Panel */}
             <div className="w-80 flex flex-col space-y-4">
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
                 <h3 className="text-sm font-semibold text-slate-200 mb-2 flex items-center space-x-2">
                   <Smartphone className="w-4 h-4 text-emerald-400" />
-                  <span>Customer Simulation Settings</span>
+                  <span>Test Customer Profile</span>
                 </h3>
                 <div className="space-y-2 text-xs">
                   <div>
@@ -779,7 +1031,1023 @@ export default function App() {
           </div>
         )}
 
-        {/* Tab 2: Webhook Inspector */}
+        {/* ============================================================== */}
+        {/* Tab 2: Orders Page                                             */}
+        {/* ============================================================== */}
+        {activeTab === 'orders' && (
+          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div className="max-w-6xl mx-auto space-y-6">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h2 className="text-lg font-bold text-white flex items-center space-x-2">
+                    <ShoppingBag className="w-5 h-5 text-emerald-400" />
+                    <span>Orders Management</span>
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Track customer orders and dispatch automated WhatsApp status updates.
+                  </p>
+                </div>
+                <button
+                  onClick={fetchAllData}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 rounded-lg flex items-center space-x-1"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Refresh Orders</span>
+                </button>
+              </div>
+
+              {/* Orders Table */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400">
+                        <th className="py-2.5 px-3">Order #</th>
+                        <th className="py-2.5 px-3">Customer</th>
+                        <th className="py-2.5 px-3">Items</th>
+                        <th className="py-2.5 px-3">Total</th>
+                        <th className="py-2.5 px-3">Address</th>
+                        <th className="py-2.5 px-3">Status</th>
+                        <th className="py-2.5 px-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-mono">
+                      {adminOrders.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="py-6 text-center text-slate-500 font-sans">
+                            No orders placed yet. Place an order in the Chat Simulator to see it here!
+                          </td>
+                        </tr>
+                      ) : (
+                        adminOrders.map((ord) => (
+                          <tr key={ord.id} className="hover:bg-slate-800/30">
+                            <td className="py-3 px-3 font-semibold text-emerald-400">{ord.orderNumber}</td>
+                            <td className="py-3 px-3 text-slate-300">
+                              <div>{ord.customerName}</div>
+                              <div className="text-[10px] text-slate-500 font-mono">+{ord.customerPhone}</div>
+                            </td>
+                            <td className="py-3 px-3 text-slate-300 font-sans">
+                              {ord.items?.map((it: any, i: number) => (
+                                <div key={i}>
+                                  {it.itemName} x{it.quantity}
+                                </div>
+                              ))}
+                            </td>
+                            <td className="py-3 px-3 text-slate-200 font-semibold">
+                              {businessSettings.currency}
+                              {ord.totalAmount}
+                            </td>
+                            <td className="py-3 px-3 text-slate-400 max-w-xs truncate font-sans">{ord.deliveryAddress}</td>
+                            <td className="py-3 px-3">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  ord.status === 'PLACED'
+                                    ? 'bg-sky-950 text-sky-400 border border-sky-800'
+                                    : ord.status === 'PREPARING'
+                                    ? 'bg-amber-950 text-amber-400 border border-amber-800'
+                                    : ord.status === 'READY'
+                                    ? 'bg-purple-950 text-purple-400 border border-purple-800'
+                                    : ord.status === 'DELIVERED'
+                                    ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                                    : 'bg-rose-950 text-rose-400 border border-rose-800'
+                                }`}
+                              >
+                                {ord.status}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 text-right space-x-1 font-sans">
+                              {ord.status !== 'PREPARING' && ord.status !== 'DELIVERED' && (
+                                <button
+                                  onClick={() => handleUpdateOrderStatus(ord.id, 'PREPARING')}
+                                  className="px-2 py-1 bg-amber-900/60 hover:bg-amber-800 text-amber-200 rounded text-[10px]"
+                                >
+                                  Prepare
+                                </button>
+                              )}
+                              {ord.status !== 'READY' && ord.status !== 'DELIVERED' && (
+                                <button
+                                  onClick={() => handleUpdateOrderStatus(ord.id, 'READY')}
+                                  className="px-2 py-1 bg-purple-900/60 hover:bg-purple-800 text-purple-200 rounded text-[10px]"
+                                >
+                                  Ready
+                                </button>
+                              )}
+                              {ord.status !== 'DELIVERED' && (
+                                <button
+                                  onClick={() => handleUpdateOrderStatus(ord.id, 'DELIVERED')}
+                                  className="px-2 py-1 bg-emerald-900/60 hover:bg-emerald-800 text-emerald-200 rounded text-[10px]"
+                                >
+                                  Deliver
+                                </button>
+                              )}
+                              {ord.status !== 'CANCELLED' && ord.status !== 'DELIVERED' && (
+                                <button
+                                  onClick={() => handleUpdateOrderStatus(ord.id, 'CANCELLED')}
+                                  className="px-2 py-1 bg-rose-900/60 hover:bg-rose-800 text-rose-200 rounded text-[10px]"
+                                >
+                                  Cancel
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ============================================================== */}
+        {/* Tab 3: Dedicated Customers Page                                */}
+        {/* ============================================================== */}
+        {activeTab === 'customers' && (
+          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div className="max-w-6xl mx-auto space-y-6">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h2 className="text-lg font-bold text-white flex items-center space-x-2">
+                    <Users className="w-5 h-5 text-emerald-400" />
+                    <span>Customers & Audience Directory</span>
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Manage opt-in compliance, human handoffs, language preferences, and direct messages.
+                  </p>
+                </div>
+                <div className="flex space-x-2 text-xs">
+                  <div className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg flex items-center space-x-2">
+                    <span className="text-slate-400">Total:</span>
+                    <span className="font-bold text-white font-mono">{adminCustomers.length}</span>
+                  </div>
+                  <div className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg flex items-center space-x-2">
+                    <span className="text-emerald-400">Opted In:</span>
+                    <span className="font-bold text-emerald-400 font-mono">{optedInCount}</span>
+                  </div>
+                  <div className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg flex items-center space-x-2">
+                    <span className="text-rose-400">Opted Out:</span>
+                    <span className="font-bold text-rose-400 font-mono">{optedOutCount}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Filters & Search Bar */}
+              <div className="flex items-center justify-between gap-4 bg-slate-900 border border-slate-800 rounded-xl p-3">
+                <div className="flex items-center space-x-2 flex-1 max-w-sm">
+                  <Search className="w-4 h-4 text-slate-500" />
+                  <input
+                    type="text"
+                    value={customerSearch}
+                    onChange={(e) => setCustomerSearch(e.target.value)}
+                    placeholder="Search by phone or name..."
+                    className="bg-transparent text-xs text-slate-200 outline-none w-full placeholder-slate-500"
+                  />
+                </div>
+                <div className="flex items-center space-x-1 text-xs">
+                  <button
+                    onClick={() => setCustomerFilter('all')}
+                    className={`px-2.5 py-1 rounded ${
+                      customerFilter === 'all' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:bg-slate-800'
+                    }`}
+                  >
+                    All ({adminCustomers.length})
+                  </button>
+                  <button
+                    onClick={() => setCustomerFilter('subscribed')}
+                    className={`px-2.5 py-1 rounded ${
+                      customerFilter === 'subscribed'
+                        ? 'bg-emerald-600 text-white'
+                        : 'text-slate-400 hover:bg-slate-800'
+                    }`}
+                  >
+                    Subscribed ({optedInCount})
+                  </button>
+                  <button
+                    onClick={() => setCustomerFilter('unsubscribed')}
+                    className={`px-2.5 py-1 rounded ${
+                      customerFilter === 'unsubscribed'
+                        ? 'bg-rose-600 text-white'
+                        : 'text-slate-400 hover:bg-slate-800'
+                    }`}
+                  >
+                    Opted Out ({optedOutCount})
+                  </button>
+                  <button
+                    onClick={() => setCustomerFilter('paused')}
+                    className={`px-2.5 py-1 rounded ${
+                      customerFilter === 'paused' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:bg-slate-800'
+                    }`}
+                  >
+                    Agent Paused ({adminConversations.filter((c) => c.isBotPaused).length})
+                  </button>
+                </div>
+              </div>
+
+              {/* Customers List & Management Grid */}
+              <div className="grid grid-cols-3 gap-6">
+                {/* Customers Table (2 Cols) */}
+                <div className="col-span-2 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400">
+                        <th className="py-2.5 px-3">Customer</th>
+                        <th className="py-2.5 px-3">Phone</th>
+                        <th className="py-2.5 px-3">Language</th>
+                        <th className="py-2.5 px-3">Compliance</th>
+                        <th className="py-2.5 px-3">Bot State</th>
+                        <th className="py-2.5 px-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-mono">
+                      {filteredCustomers.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="py-8 text-center text-slate-500 font-sans">
+                            No customers found matching criteria.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredCustomers.map((cust) => {
+                          const conv = adminConversations.find((c) => c.customerId === cust.id);
+                          const isSelected = selectedCustomer?.id === cust.id;
+                          return (
+                            <tr
+                              key={cust.id}
+                              onClick={() => setSelectedCustomer(cust)}
+                              className={`cursor-pointer transition-colors ${
+                                isSelected ? 'bg-emerald-950/40 border-l-2 border-emerald-500' : 'hover:bg-slate-800/30'
+                              }`}
+                            >
+                              <td className="py-3 px-3 font-sans font-medium text-slate-200">
+                                {cust.name || 'Anonymous User'}
+                              </td>
+                              <td className="py-3 px-3 text-emerald-400 font-mono">+{cust.phone}</td>
+                              <td className="py-3 px-3">
+                                <span className="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-slate-300 uppercase font-semibold">
+                                  {cust.language}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3 font-sans">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleOptIn(cust.id, cust.optedIn);
+                                  }}
+                                  title="Click to toggle opt-in/opt-out"
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                    cust.optedIn
+                                      ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                                      : 'bg-rose-950 text-rose-400 border border-rose-800'
+                                  }`}
+                                >
+                                  {cust.optedIn ? 'Opted In' : 'Opted Out'}
+                                </button>
+                              </td>
+                              <td className="py-3 px-3 font-sans">
+                                {conv?.isBotPaused ? (
+                                  <span className="px-2 py-0.5 rounded text-[10px] bg-amber-950 text-amber-300 border border-amber-800 flex items-center space-x-1 w-max">
+                                    <PauseCircle className="w-3 h-3" />
+                                    <span>Agent Paused</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] text-slate-400 font-mono">
+                                    {conv?.state || 'MAIN_MENU'}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3 text-right font-sans space-x-1">
+                                {conv?.isBotPaused ? (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleResumeBot(cust.id);
+                                    }}
+                                    className="px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded text-[10px] font-medium"
+                                  >
+                                    Resume Bot
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handlePauseBot(cust.id);
+                                    }}
+                                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[10px]"
+                                  >
+                                    Pause Bot
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Customer Details & Direct Messaging Panel (1 Col) */}
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                  {selectedCustomer ? (
+                    <>
+                      <div className="flex justify-between items-start border-b border-slate-800 pb-3">
+                        <div>
+                          <h3 className="font-semibold text-sm text-white">
+                            {selectedCustomer.name || 'Anonymous User'}
+                          </h3>
+                          <div className="text-xs text-emerald-400 font-mono">+{selectedCustomer.phone}</div>
+                        </div>
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            selectedCustomer.optedIn
+                              ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                              : 'bg-rose-950 text-rose-400 border border-rose-800'
+                          }`}
+                        >
+                          {selectedCustomer.optedIn ? 'Active Subscriber' : 'Unsubscribed'}
+                        </span>
+                      </div>
+
+                      <div className="space-y-2 text-xs">
+                        <div className="flex justify-between py-1 border-b border-slate-800/60">
+                          <span className="text-slate-400">Language:</span>
+                          <div className="flex space-x-1">
+                            <button
+                              onClick={() => handleChangeLanguage(selectedCustomer.id, 'en')}
+                              className={`px-2 py-0.5 rounded ${
+                                selectedCustomer.language === 'en'
+                                  ? 'bg-emerald-600 text-white font-bold'
+                                  : 'bg-slate-800 text-slate-400'
+                              }`}
+                            >
+                              EN
+                            </button>
+                            <button
+                              onClick={() => handleChangeLanguage(selectedCustomer.id, 'hi')}
+                              className={`px-2 py-0.5 rounded ${
+                                selectedCustomer.language === 'hi'
+                                  ? 'bg-emerald-600 text-white font-bold'
+                                  : 'bg-slate-800 text-slate-400'
+                              }`}
+                            >
+                              HI (हिंदी)
+                            </button>
+                          </div>
+                        </div>
+                        <div className="flex justify-between py-1 border-b border-slate-800/60">
+                          <span className="text-slate-400">Joined:</span>
+                          <span className="text-slate-300">
+                            {new Date(selectedCustomer.createdAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                        <div className="flex justify-between py-1 border-b border-slate-800/60">
+                          <span className="text-slate-400">Orders:</span>
+                          <span className="font-semibold text-white">
+                            {adminOrders.filter((o) => o.customerId === selectedCustomer.id).length} Orders
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Direct Staff Message to WhatsApp */}
+                      <div className="pt-2 border-t border-slate-800 space-y-2">
+                        <label className="text-xs font-semibold text-slate-200 flex items-center space-x-1">
+                          <MessageCircle className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Direct Staff WhatsApp Message</span>
+                        </label>
+                        <p className="text-[11px] text-slate-400">
+                          Send a message directly from staff to this customer’s WhatsApp phone:
+                        </p>
+                        <textarea
+                          rows={3}
+                          value={directMessageText}
+                          onChange={(e) => setDirectMessageText(e.target.value)}
+                          placeholder="Type your message to customer..."
+                          className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-xs text-white outline-none focus:border-emerald-500"
+                        />
+                        <button
+                          onClick={handleSendDirectMessage}
+                          disabled={isSendingDirectMessage || !directMessageText.trim()}
+                          className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-medium rounded-lg flex items-center justify-center space-x-1.5"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          <span>Send WhatsApp Message</span>
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-center py-10 text-slate-500 text-xs">
+                      <Users className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                      Select a customer from the table to view details or send a direct WhatsApp message.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ============================================================== */}
+        {/* Tab 4: Dedicated Broadcast Page                                */}
+        {/* ============================================================== */}
+        {activeTab === 'broadcast' && (
+          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div className="max-w-5xl mx-auto space-y-6">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h2 className="text-lg font-bold text-white flex items-center space-x-2">
+                    <Radio className="w-5 h-5 text-emerald-400" />
+                    <span>WhatsApp Broadcast Campaigns</span>
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Send approved WhatsApp template announcements to opted-in customers with rate limiting.
+                  </p>
+                </div>
+              </div>
+
+              {/* Campaign Runner Card */}
+              <div className="grid grid-cols-3 gap-6">
+                <div className="col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                  <h3 className="font-semibold text-sm text-white">Create New Broadcast</h3>
+
+                  <div className="space-y-3 text-xs">
+                    <div>
+                      <label className="text-slate-400 block mb-1">WhatsApp Approved Template Name:</label>
+                      <select
+                        value={broadcastTemplate}
+                        onChange={(e) => setBroadcastTemplate(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200"
+                      >
+                        <option value="seasonal_offer">seasonal_offer (Festival Discount Announcement)</option>
+                        <option value="weekend_special_offer">weekend_special_offer (Weekend Chef Special Menu)</option>
+                        <option value="store_announcement">store_announcement (Operating Hours & Updates)</option>
+                        <option value="order_status_update">order_status_update (Utility Template)</option>
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-slate-400 block mb-1">Language Code:</label>
+                        <select
+                          value={broadcastLang}
+                          onChange={(e) => setBroadcastLang(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200"
+                        >
+                          <option value="en_US">English (en_US)</option>
+                          <option value="hi">Hindi (hi)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-slate-400 block mb-1">Rate-Limit Delay Between Sends (ms):</label>
+                        <input
+                          type="number"
+                          value={broadcastDelay}
+                          onChange={(e) => setBroadcastDelay(Number(e.target.value))}
+                          step={100}
+                          min={200}
+                          max={5000}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Audience preview */}
+                    <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1.5 text-xs">
+                      <div className="font-semibold text-slate-300">Target Audience Preview:</div>
+                      <div className="flex justify-between text-slate-400">
+                        <span>Total Registered Customers:</span>
+                        <span className="font-mono text-white">{adminCustomers.length}</span>
+                      </div>
+                      <div className="flex justify-between text-emerald-400">
+                        <span>Eligible Opted-In Recipients:</span>
+                        <span className="font-mono font-bold">{optedInCount}</span>
+                      </div>
+                      <div className="flex justify-between text-rose-400">
+                        <span>Unsubscribed (Will be skipped per Meta policy):</span>
+                        <span className="font-mono">{optedOutCount}</span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={handleTriggerBroadcast}
+                      disabled={isBroadcasting || optedInCount === 0}
+                      className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium rounded-lg flex items-center justify-center space-x-2 transition-all shadow-lg shadow-emerald-900/30"
+                    >
+                      <Radio className="w-4 h-4" />
+                      <span>{isBroadcasting ? 'Broadcasting...' : 'Launch Broadcast Campaign'}</span>
+                    </button>
+
+                    {broadcastStatus && (
+                      <div className="p-3 bg-emerald-950/40 border border-emerald-800 rounded-lg text-emerald-300 font-mono text-xs">
+                        {broadcastStatus}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Compliance & Meta Guidelines Card */}
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3 text-xs text-slate-300 leading-relaxed">
+                  <h3 className="font-semibold text-sm text-white flex items-center space-x-1.5">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                    <span>Broadcast Rules & Limits</span>
+                  </h3>
+                  <p>
+                    • <strong>Opt-In Strict Enforcement:</strong> The bot strictly verifies that{' '}
+                    <code className="text-emerald-400">optedIn === true</code>. Any customer who replied STOP is
+                    never messaged.
+                  </p>
+                  <p>
+                    • <strong>Rate Limiting:</strong> A delay of {broadcastDelay}ms is added between each API call to
+                    avoid Meta API Tier throttles and keep Render within free memory limits.
+                  </p>
+                  <p>
+                    • <strong>Templates Only:</strong> Meta WhatsApp Cloud API policy requires pre-approved template
+                    messages for unsolicited broadcasts outside 24h windows.
+                  </p>
+                </div>
+              </div>
+
+              {/* Broadcast History Table */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
+                <h3 className="font-semibold text-sm text-white">Broadcast History</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400">
+                        <th className="py-2 px-3">Date & Time</th>
+                        <th className="py-2 px-3">Template</th>
+                        <th className="py-2 px-3">Targeted</th>
+                        <th className="py-2 px-3">Delivered</th>
+                        <th className="py-2 px-3">Skipped (Opt-out)</th>
+                        <th className="py-2 px-3">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-mono">
+                      {broadcastHistory.map((bc, idx) => (
+                        <tr key={bc.id || idx}>
+                          <td className="py-2.5 px-3 text-slate-400">
+                            {new Date(bc.timestamp).toLocaleString()}
+                          </td>
+                          <td className="py-2.5 px-3 text-emerald-400 font-semibold">{bc.templateName}</td>
+                          <td className="py-2.5 px-3 text-slate-300">{bc.totalTargeted}</td>
+                          <td className="py-2.5 px-3 text-emerald-400 font-bold">{bc.sentCount}</td>
+                          <td className="py-2.5 px-3 text-slate-400">{bc.skippedUnsubscribed}</td>
+                          <td className="py-2.5 px-3">
+                            <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800">
+                              Completed
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ============================================================== */}
+        {/* Tab 5: Auto-Reply Settings & Menu Editor                       */}
+        {/* ============================================================== */}
+        {activeTab === 'settings' && (
+          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div className="max-w-5xl mx-auto space-y-6">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h2 className="text-lg font-bold text-white flex items-center space-x-2">
+                    <Sliders className="w-5 h-5 text-emerald-400" />
+                    <span>Auto-Reply Settings & Menu Customizer</span>
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Change business name, category, currency, welcome messages, operating hours, and catalog menu items.
+                  </p>
+                </div>
+                <button
+                  onClick={handleSaveBusinessSettings}
+                  disabled={isSavingConfig}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg flex items-center space-x-1.5 shadow-lg shadow-emerald-900/30"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{isSavingConfig ? 'Saving Changes...' : 'Save Configuration'}</span>
+                </button>
+              </div>
+
+              {configSaveSuccess && (
+                <div className="p-3 bg-emerald-950/60 border border-emerald-500 rounded-lg text-emerald-300 text-xs font-semibold flex items-center space-x-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  <span>Business settings, welcome message, and menu updated successfully! Tested live in bot.</span>
+                </div>
+              )}
+
+              {/* Business Profile Details */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                <h3 className="font-semibold text-sm text-white flex items-center space-x-2">
+                  <Store className="w-4 h-4 text-emerald-400" />
+                  <span>1. Business Profile Information</span>
+                </h3>
+
+                <div className="grid grid-cols-3 gap-4 text-xs">
+                  <div>
+                    <label className="text-slate-400 block mb-1">Business Name:</label>
+                    <input
+                      type="text"
+                      value={businessSettings.name}
+                      onChange={(e) => setBusinessSettings({ ...businessSettings, name: e.target.value })}
+                      placeholder="e.g. Spice Garden Bistro & Cafe"
+                      className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-white font-medium"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 block mb-1">Business Category:</label>
+                    <select
+                      value={businessSettings.category}
+                      onChange={(e) => setBusinessSettings({ ...businessSettings, category: e.target.value as any })}
+                      className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-white"
+                    >
+                      <option value="restaurant">Restaurant / Cafe</option>
+                      <option value="grocery">Grocery / Supermarket</option>
+                      <option value="salon">Salon / Spa / Wellness</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 block mb-1">Currency Symbol:</label>
+                    <input
+                      type="text"
+                      value={businessSettings.currency}
+                      onChange={(e) => setBusinessSettings({ ...businessSettings, currency: e.target.value })}
+                      placeholder="₹, $, €, £"
+                      className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-emerald-400 font-bold"
+                    />
+                  </div>
+
+                  <div className="col-span-2">
+                    <label className="text-slate-400 block mb-1">Tagline:</label>
+                    <input
+                      type="text"
+                      value={businessSettings.tagline}
+                      onChange={(e) => setBusinessSettings({ ...businessSettings, tagline: e.target.value })}
+                      placeholder="e.g. Authentic Flavors, Fresh Ingredients"
+                      className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 block mb-1">Support Phone:</label>
+                    <input
+                      type="text"
+                      value={businessSettings.supportPhone}
+                      onChange={(e) => setBusinessSettings({ ...businessSettings, supportPhone: e.target.value })}
+                      placeholder="+91 98765 43210"
+                      className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-slate-200 font-mono"
+                    />
+                  </div>
+
+                  <div className="col-span-2">
+                    <label className="text-slate-400 block mb-1">Physical Address:</label>
+                    <input
+                      type="text"
+                      value={businessSettings.address}
+                      onChange={(e) => setBusinessSettings({ ...businessSettings, address: e.target.value })}
+                      placeholder="Street, City, Zip"
+                      className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 block mb-1">Operating Hours:</label>
+                    <input
+                      type="text"
+                      value={businessSettings.hours}
+                      onChange={(e) => setBusinessSettings({ ...businessSettings, hours: e.target.value })}
+                      placeholder="Mon - Sun: 10:00 AM - 11:00 PM"
+                      className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Welcome Messages Customization */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                <h3 className="font-semibold text-sm text-white flex items-center space-x-2">
+                  <MessageSquare className="w-4 h-4 text-emerald-400" />
+                  <span>2. Welcome Messages (Auto-Replies)</span>
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Custom greeting sent when a customer first contacts your business or after 24h of inactivity. Supports variables:{' '}
+                  <code className="text-emerald-300 font-mono">{'{businessName}'}</code>,{' '}
+                  <code className="text-emerald-300 font-mono">{'{tagline}'}</code>.
+                </p>
+
+                <div className="grid grid-cols-2 gap-4 text-xs">
+                  <div>
+                    <label className="text-slate-300 font-semibold block mb-1 flex items-center space-x-1">
+                      <span>English Welcome Message:</span>
+                    </label>
+                    <textarea
+                      rows={5}
+                      value={businessSettings.welcomeMessageEn}
+                      onChange={(e) => setBusinessSettings({ ...businessSettings, welcomeMessageEn: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-xs text-white outline-none focus:border-emerald-500 font-sans"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-slate-300 font-semibold block mb-1 flex items-center space-x-1">
+                      <span>Hindi Welcome Message (हिंदी):</span>
+                    </label>
+                    <textarea
+                      rows={5}
+                      value={businessSettings.welcomeMessageHi}
+                      onChange={(e) => setBusinessSettings({ ...businessSettings, welcomeMessageHi: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-xs text-white outline-none focus:border-emerald-500 font-sans"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Menu & Catalog Items Customizer */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h3 className="font-semibold text-sm text-white flex items-center space-x-2">
+                      <ShoppingBag className="w-4 h-4 text-emerald-400" />
+                      <span>3. Catalog Menu Items & Services ({businessSettings.menuItems.length} Items)</span>
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      These items are rendered in WhatsApp Interactive List Messages when customers click "Order Now" or type "menu".
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setIsAddingNewItem(true)}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg flex items-center space-x-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Item</span>
+                  </button>
+                </div>
+
+                {/* Add New Item Drawer / Form */}
+                {isAddingNewItem && (
+                  <div className="p-4 bg-slate-950 border border-emerald-500/40 rounded-xl space-y-3 animate-in fade-in">
+                    <div className="flex justify-between items-center">
+                      <h4 className="text-xs font-bold text-emerald-400">Add New Dish / Service</h4>
+                      <button
+                        onClick={() => setIsAddingNewItem(false)}
+                        className="text-xs text-slate-400 hover:text-white"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-4 gap-3 text-xs">
+                      <div>
+                        <label className="text-slate-400 block mb-1">Item Title:</label>
+                        <input
+                          type="text"
+                          value={newItemForm.title}
+                          onChange={(e) => setNewItemForm({ ...newItemForm, title: e.target.value })}
+                          placeholder="e.g. Masala Dosa"
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 block mb-1">Category:</label>
+                        <input
+                          type="text"
+                          value={newItemForm.category}
+                          onChange={(e) => setNewItemForm({ ...newItemForm, category: e.target.value })}
+                          placeholder="e.g. Starters, Main Course"
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 block mb-1">Price ({businessSettings.currency}):</label>
+                        <input
+                          type="number"
+                          value={newItemForm.price}
+                          onChange={(e) => setNewItemForm({ ...newItemForm, price: Number(e.target.value) })}
+                          placeholder="150"
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-emerald-400 font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 block mb-1">Item ID (optional):</label>
+                        <input
+                          type="text"
+                          value={newItemForm.id}
+                          onChange={(e) => setNewItemForm({ ...newItemForm, id: e.target.value })}
+                          placeholder="e.g. dish_11"
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-slate-300 font-mono"
+                        />
+                      </div>
+                      <div className="col-span-4">
+                        <label className="text-slate-400 block mb-1">Description:</label>
+                        <input
+                          type="text"
+                          value={newItemForm.description}
+                          onChange={(e) => setNewItemForm({ ...newItemForm, description: e.target.value })}
+                          placeholder="Brief dish ingredients or service details (max 72 chars)"
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-white"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end">
+                      <button
+                        onClick={handleAddMenuItem}
+                        disabled={!newItemForm.title || !newItemForm.price}
+                        className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg flex items-center space-x-1"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Save and Add to Menu</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Edit Item Modal / Inline Form */}
+                {editingMenuItem && (
+                  <div className="p-4 bg-slate-950 border border-amber-500/40 rounded-xl space-y-3 animate-in fade-in">
+                    <div className="flex justify-between items-center">
+                      <h4 className="text-xs font-bold text-amber-400">Edit Dish / Service</h4>
+                      <button
+                        onClick={() => setEditingMenuItem(null)}
+                        className="text-xs text-slate-400 hover:text-white"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3 text-xs">
+                      <div>
+                        <label className="text-slate-400 block mb-1">Item Title:</label>
+                        <input
+                          type="text"
+                          value={editingMenuItem.title}
+                          onChange={(e) => setEditingMenuItem({ ...editingMenuItem, title: e.target.value })}
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 block mb-1">Category:</label>
+                        <input
+                          type="text"
+                          value={editingMenuItem.category}
+                          onChange={(e) => setEditingMenuItem({ ...editingMenuItem, category: e.target.value })}
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 block mb-1">Price ({businessSettings.currency}):</label>
+                        <input
+                          type="number"
+                          value={editingMenuItem.price}
+                          onChange={(e) => setEditingMenuItem({ ...editingMenuItem, price: Number(e.target.value) })}
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-emerald-400 font-bold"
+                        />
+                      </div>
+                      <div className="col-span-3">
+                        <label className="text-slate-400 block mb-1">Description:</label>
+                        <input
+                          type="text"
+                          value={editingMenuItem.description}
+                          onChange={(e) => setEditingMenuItem({ ...editingMenuItem, description: e.target.value })}
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-white"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end space-x-2">
+                      <button
+                        onClick={() => setEditingMenuItem(null)}
+                        className="px-3 py-1.5 bg-slate-800 text-slate-300 text-xs rounded-lg"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleUpdateMenuItem}
+                        className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded-lg flex items-center space-x-1"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Update Dish</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Menu items table */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400">
+                        <th className="py-2.5 px-3">Title</th>
+                        <th className="py-2.5 px-3">Category</th>
+                        <th className="py-2.5 px-3">Description</th>
+                        <th className="py-2.5 px-3">Price</th>
+                        <th className="py-2.5 px-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-sans">
+                      {businessSettings.menuItems.map((item) => (
+                        <tr key={item.id} className="hover:bg-slate-800/30">
+                          <td className="py-2.5 px-3 font-semibold text-white">{item.title}</td>
+                          <td className="py-2.5 px-3">
+                            <span className="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-slate-300">
+                              {item.category}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-400 max-w-sm truncate">{item.description}</td>
+                          <td className="py-2.5 px-3 font-mono font-bold text-emerald-400">
+                            {businessSettings.currency}
+                            {item.price}
+                          </td>
+                          <td className="py-2.5 px-3 text-right space-x-1">
+                            <button
+                              onClick={() => setEditingMenuItem(item)}
+                              className="p-1 hover:text-amber-400 text-slate-400"
+                              title="Edit Item"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteMenuItem(item.id)}
+                              className="p-1 hover:text-rose-400 text-slate-400"
+                              title="Delete Item"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Meta WhatsApp Cloud API Credentials & Live Sync */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h3 className="font-semibold text-sm text-white flex items-center space-x-2">
+                      <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                      <span>4. Meta WhatsApp Cloud API Connection</span>
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Connect your live Meta WhatsApp Cloud number, or run in 100% free simulated sandbox mode.
+                    </p>
+                  </div>
+                  <span
+                    className={`px-2.5 py-1 rounded-full text-xs font-semibold flex items-center space-x-1.5 ${
+                      metaCredentials.hasLiveToken
+                        ? 'bg-emerald-950 text-emerald-300 border border-emerald-700'
+                        : 'bg-sky-950 text-sky-300 border border-sky-700'
+                    }`}
+                  >
+                    <span className={`w-2 h-2 rounded-full ${metaCredentials.hasLiveToken ? 'bg-emerald-400 animate-pulse' : 'bg-sky-400'}`} />
+                    <span>{metaCredentials.hasLiveToken ? 'Live Meta API Connected' : 'Sandbox Simulation Mode Active'}</span>
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 text-xs">
+                  <div>
+                    <label className="text-slate-400 block mb-1">Phone Number ID (from Meta Developer Console):</label>
+                    <input
+                      type="text"
+                      value={metaCredentials.phoneNumberId}
+                      onChange={(e) => setMetaCredentials({ ...metaCredentials, phoneNumberId: e.target.value })}
+                      placeholder="e.g. 109876543210987"
+                      className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-white font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 block mb-1">Permanent Access Token (or Temporary 24h Token):</label>
+                    <input
+                      type="password"
+                      value={metaCredentials.whatsappToken}
+                      onChange={(e) => setMetaCredentials({ ...metaCredentials, whatsappToken: e.target.value })}
+                      placeholder={metaCredentials.hasLiveToken ? '••••••••••••••••••••••••' : 'Paste EAA... token here'}
+                      className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-emerald-400 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-3 text-xs text-slate-400 space-y-1">
+                  <div className="text-slate-300 font-semibold flex items-center space-x-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Zero-Downtime Sandbox Fallback Guarantee:</span>
+                  </div>
+                  <p>
+                    If your Meta token expires (HTTP 401 error code 190) or has not been configured yet, the assistant automatically routes messages via the interactive <strong>Sandbox Simulator</strong> so your chat assistant never crashes, drops messages, or gets stuck in retries!
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ============================================================== */}
+        {/* Tab 6: Webhook Inspector                                       */}
+        {/* ============================================================== */}
         {activeTab === 'webhook' && (
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
             <div className="max-w-4xl mx-auto space-y-6">
@@ -792,7 +2060,8 @@ export default function App() {
                       <span>1. GET /webhook — Meta Verification Handshake</span>
                     </h3>
                     <p className="text-xs text-slate-400 mt-1">
-                      Meta WhatsApp Cloud API sends a GET request with <code className="text-emerald-300">hub.mode=subscribe</code>,{' '}
+                      Meta WhatsApp Cloud API sends a GET request with{' '}
+                      <code className="text-emerald-300">hub.mode=subscribe</code>,{' '}
                       <code className="text-emerald-300">hub.verify_token</code>, and a challenge.
                     </p>
                   </div>
@@ -864,13 +2133,10 @@ export default function App() {
                 <div className="space-y-2">
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-slate-400">Meta Incoming Webhook JSON Payload:</span>
-                      <button
-                        onClick={() =>
-                          copyToClipboard(
-                            customWebhookPayload || sampleIncomingText,
-                            'webhook_json'
-                          )
-                        }
+                    <button
+                      onClick={() =>
+                        copyToClipboard(customWebhookPayload || sampleIncomingText, 'webhook_json')
+                      }
                       className="text-emerald-400 hover:text-emerald-300 flex items-center space-x-1"
                     >
                       {copiedKey === 'webhook_json' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
@@ -898,230 +2164,9 @@ export default function App() {
           </div>
         )}
 
-        {/* Tab 3: Admin Console & Orders */}
-        {activeTab === 'admin' && (
-          <div className="flex-1 overflow-y-auto p-6 space-y-6">
-            <div className="max-w-6xl mx-auto space-y-6">
-              {/* Header stats & actions */}
-              <div className="grid grid-cols-4 gap-4">
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                  <div className="text-slate-400 text-xs mb-1">Total Orders</div>
-                  <div className="text-2xl font-bold text-white">{adminOrders.length}</div>
-                </div>
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                  <div className="text-slate-400 text-xs mb-1">Total Customers</div>
-                  <div className="text-2xl font-bold text-emerald-400">{adminCustomers.length}</div>
-                </div>
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                  <div className="text-slate-400 text-xs mb-1">Active Handoffs (Agent Paused)</div>
-                  <div className="text-2xl font-bold text-amber-400">
-                    {adminConversations.filter((c) => c.isBotPaused).length}
-                  </div>
-                </div>
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
-                  <div className="text-slate-400 text-xs">Admin Key</div>
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="password"
-                      value={adminApiKey}
-                      onChange={(e) => setAdminApiKey(e.target.value)}
-                      className="bg-slate-950 border border-slate-700 text-xs rounded px-2 py-1 w-full font-mono text-slate-300"
-                    />
-                    <button
-                      onClick={fetchAdminData}
-                      className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300"
-                      title="Refresh Data"
-                    >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Live Order Management & Status Triggers */}
-              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
-                <h3 className="font-semibold text-slate-100 flex items-center space-x-2">
-                  <ShoppingBag className="w-4 h-4 text-emerald-400" />
-                  <span>Orders Table & WhatsApp Status Update Dispatcher</span>
-                </h3>
-                <p className="text-xs text-slate-400">
-                  Updating status dispatches a free-form WhatsApp notification to the customer if within 24h, or a WhatsApp Template message outside 24h.
-                </p>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="border-b border-slate-800 text-slate-400">
-                        <th className="py-2.5 px-3">Order #</th>
-                        <th className="py-2.5 px-3">Customer</th>
-                        <th className="py-2.5 px-3">Items</th>
-                        <th className="py-2.5 px-3">Total</th>
-                        <th className="py-2.5 px-3">Address</th>
-                        <th className="py-2.5 px-3">Status</th>
-                        <th className="py-2.5 px-3 text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800/60 font-mono">
-                      {adminOrders.map((ord) => (
-                        <tr key={ord.id} className="hover:bg-slate-800/30">
-                          <td className="py-3 px-3 font-semibold text-emerald-400">{ord.orderNumber}</td>
-                          <td className="py-3 px-3 text-slate-300">
-                            <div>{ord.customerName}</div>
-                            <div className="text-[10px] text-slate-500">+{ord.customerPhone}</div>
-                          </td>
-                          <td className="py-3 px-3 text-slate-300">
-                            {ord.items?.map((it: any, i: number) => (
-                              <div key={i}>
-                                {it.itemName} x{it.quantity}
-                              </div>
-                            ))}
-                          </td>
-                          <td className="py-3 px-3 text-slate-200">
-                            {businessConfig.currency}
-                            {ord.totalAmount}
-                          </td>
-                          <td className="py-3 px-3 text-slate-400 max-w-xs truncate">{ord.deliveryAddress}</td>
-                          <td className="py-3 px-3">
-                            <span
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                ord.status === 'PLACED'
-                                  ? 'bg-sky-950 text-sky-400 border border-sky-800'
-                                  : ord.status === 'PREPARING'
-                                  ? 'bg-amber-950 text-amber-400 border border-amber-800'
-                                  : ord.status === 'READY'
-                                  ? 'bg-purple-950 text-purple-400 border border-purple-800'
-                                  : ord.status === 'DELIVERED'
-                                  ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                                  : 'bg-rose-950 text-rose-400 border border-rose-800'
-                              }`}
-                            >
-                              {ord.status}
-                            </span>
-                          </td>
-                          <td className="py-3 px-3 text-right space-x-1">
-                            {ord.status !== 'PREPARING' && ord.status !== 'DELIVERED' && (
-                              <button
-                                onClick={() => handleUpdateOrderStatus(ord.id, 'PREPARING')}
-                                className="px-2 py-1 bg-amber-900/60 hover:bg-amber-800 text-amber-200 rounded text-[10px]"
-                              >
-                                Prepare
-                              </button>
-                            )}
-                            {ord.status !== 'READY' && ord.status !== 'DELIVERED' && (
-                              <button
-                                onClick={() => handleUpdateOrderStatus(ord.id, 'READY')}
-                                className="px-2 py-1 bg-purple-900/60 hover:bg-purple-800 text-purple-200 rounded text-[10px]"
-                              >
-                                Ready
-                              </button>
-                            )}
-                            {ord.status !== 'DELIVERED' && (
-                              <button
-                                onClick={() => handleUpdateOrderStatus(ord.id, 'DELIVERED')}
-                                className="px-2 py-1 bg-emerald-900/60 hover:bg-emerald-800 text-emerald-200 rounded text-[10px]"
-                              >
-                                Deliver
-                              </button>
-                            )}
-                            {ord.status !== 'CANCELLED' && ord.status !== 'DELIVERED' && (
-                              <button
-                                onClick={() => handleUpdateOrderStatus(ord.id, 'CANCELLED')}
-                                className="px-2 py-1 bg-rose-900/60 hover:bg-rose-800 text-rose-200 rounded text-[10px]"
-                              >
-                                Cancel
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Customer Directory & Bot Handoff Control */}
-              <div className="grid grid-cols-2 gap-6">
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
-                  <h3 className="font-semibold text-slate-100 flex items-center space-x-2">
-                    <Users className="w-4 h-4 text-emerald-400" />
-                    <span>Customer List & Opt-In Status</span>
-                  </h3>
-                  <div className="space-y-2">
-                    {adminCustomers.map((cust) => {
-                      const conv = adminConversations.find((c) => c.customerId === cust.id);
-                      return (
-                        <div
-                          key={cust.id}
-                          className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs flex justify-between items-center"
-                        >
-                          <div>
-                            <div className="font-semibold text-slate-200">
-                              {cust.name || 'Anonymous'} (+{cust.phone})
-                            </div>
-                            <div className="text-[11px] text-slate-400 flex items-center space-x-2 mt-0.5">
-                              <span>Lang: {cust.language.toUpperCase()}</span>
-                              <span>•</span>
-                              <span className={cust.optedIn ? 'text-emerald-400' : 'text-rose-400'}>
-                                {cust.optedIn ? 'Subscribed' : 'Opted Out (STOP)'}
-                              </span>
-                            </div>
-                          </div>
-
-                          {conv?.isBotPaused && (
-                            <button
-                              onClick={() => handleResumeBot(cust.id)}
-                              className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium text-[11px] flex items-center space-x-1"
-                            >
-                              <Play className="w-3 h-3" />
-                              <span>Resume Bot</span>
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Broadcast Campaign Runner */}
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
-                  <h3 className="font-semibold text-slate-100 flex items-center space-x-2">
-                    <Radio className="w-4 h-4 text-emerald-400" />
-                    <span>Rate-Limited WhatsApp Broadcast</span>
-                  </h3>
-                  <p className="text-xs text-slate-400">
-                    Sends an approved WhatsApp Template to all opted-in customers with rate limiting (600ms delay between sends).
-                  </p>
-
-                  <div className="space-y-3 text-xs">
-                    <div>
-                      <label className="text-slate-400 block mb-1">Template Name:</label>
-                      <input
-                        type="text"
-                        value={broadcastTemplate}
-                        onChange={(e) => setBroadcastTemplate(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 font-mono text-emerald-400"
-                      />
-                    </div>
-                    <button
-                      onClick={handleTriggerBroadcast}
-                      className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-medium flex items-center justify-center space-x-2"
-                    >
-                      <Radio className="w-4 h-4" />
-                      <span>Dispatch Broadcast Campaign</span>
-                    </button>
-                    {broadcastStatus && (
-                      <div className="p-2.5 bg-slate-950 border border-slate-800 rounded text-emerald-400 font-mono text-[11px]">
-                        {broadcastStatus}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Tab 4: Sample JSON Payloads */}
+        {/* ============================================================== */}
+        {/* Tab 7: Sample JSON Payloads                                    */}
+        {/* ============================================================== */}
         {activeTab === 'samples' && (
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
             <div className="max-w-4xl mx-auto space-y-6">
@@ -1140,7 +2185,11 @@ export default function App() {
                         onClick={() => copyToClipboard(sampleIncomingText, 'sample_in_text')}
                         className="text-slate-400 hover:text-white flex items-center space-x-1"
                       >
-                        {copiedKey === 'sample_in_text' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3 text-emerald-400" />}
+                        {copiedKey === 'sample_in_text' ? (
+                          <Check className="w-3 h-3" />
+                        ) : (
+                          <Copy className="w-3 h-3 text-emerald-400" />
+                        )}
                         <span>Copy JSON</span>
                       </button>
                     </div>
@@ -1157,7 +2206,11 @@ export default function App() {
                         onClick={() => copyToClipboard(sampleIncomingListReply, 'sample_in_list')}
                         className="text-slate-400 hover:text-white flex items-center space-x-1"
                       >
-                        {copiedKey === 'sample_in_list' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3 text-emerald-400" />}
+                        {copiedKey === 'sample_in_list' ? (
+                          <Check className="w-3 h-3" />
+                        ) : (
+                          <Copy className="w-3 h-3 text-emerald-400" />
+                        )}
                         <span>Copy JSON</span>
                       </button>
                     </div>
@@ -1174,7 +2227,11 @@ export default function App() {
                         onClick={() => copyToClipboard(sampleOutgoingList, 'sample_out_list')}
                         className="text-slate-400 hover:text-white flex items-center space-x-1"
                       >
-                        {copiedKey === 'sample_out_list' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3 text-emerald-400" />}
+                        {copiedKey === 'sample_out_list' ? (
+                          <Check className="w-3 h-3" />
+                        ) : (
+                          <Copy className="w-3 h-3 text-emerald-400" />
+                        )}
                         <span>Copy JSON</span>
                       </button>
                     </div>
@@ -1191,7 +2248,11 @@ export default function App() {
                         onClick={() => copyToClipboard(sampleOutgoingTemplate, 'sample_out_tmpl')}
                         className="text-slate-400 hover:text-white flex items-center space-x-1"
                       >
-                        {copiedKey === 'sample_out_tmpl' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3 text-emerald-400" />}
+                        {copiedKey === 'sample_out_tmpl' ? (
+                          <Check className="w-3 h-3" />
+                        ) : (
+                          <Copy className="w-3 h-3 text-emerald-400" />
+                        )}
                         <span>Copy JSON</span>
                       </button>
                     </div>
@@ -1205,7 +2266,9 @@ export default function App() {
           </div>
         )}
 
-        {/* Tab 5: Setup Guide & Test Plan */}
+        {/* ============================================================== */}
+        {/* Tab 8: Setup Guide & Test Plan                                 */}
+        {/* ============================================================== */}
         {activeTab === 'guide' && (
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
             <div className="max-w-4xl mx-auto space-y-6 text-xs text-slate-300 leading-relaxed">
@@ -1347,15 +2410,15 @@ export default function App() {
                       User: hi
                       Bot:  [Welcome message + Main Menu List: Order Now, Track Order, Hours & Location...]
                       User: [Selects 'Order Now' or types 'menu']
-                      Bot:  [Sends Catalog List of 10 dishes]
-                      User: [Selects 'Butter Chicken' (dish_01)]
+                      Bot:  [Sends Catalog List of dishes]
+                      User: [Selects dish]
                       Bot:  [Sends Quantity buttons: 1, 2, 3]
                       User: [Clicks 2]
-                      Bot:  "Great! You have selected 2x Butter Chicken (Total: ₹760). Please enter your Delivery Address:"
+                      Bot:  "Great! You have selected 2x [Item] (Total: ₹...). Please enter your Delivery Address:"
                       User: "Flat 402, Sunshine Heights, MG Road, Bangalore"
                       Bot:  [Summary + Confirm Order / Cancel buttons]
                       User: [Clicks Confirm Order]
-                      Bot:  "Order Placed Successfully! Order ID: #ORD-1002" (+ Instant alert to Owner WhatsApp)
+                      Bot:  "Order Placed Successfully! Order ID: #ORD-..." (+ Instant alert to Owner WhatsApp)
                     </pre>
                   </div>
 

@@ -95,6 +95,87 @@ export class AdminController {
     }
   }
 
+  async getBroadcastHistory(req: Request, res: Response): Promise<void> {
+    try {
+      const history = broadcastService.getBroadcastHistory();
+      res.json({ success: true, count: history.length, data: history });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  async updateCustomerOptIn(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { optedIn } = req.body;
+      const updated = await dbService.updateCustomerOptInById(id, Boolean(optedIn));
+      if (!updated) {
+        res.status(404).json({ success: false, error: 'Customer not found' });
+        return;
+      }
+      res.json({ success: true, message: `Customer opt-in set to ${optedIn}`, data: updated });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  async updateCustomerLanguage(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { language } = req.body;
+      if (language !== 'en' && language !== 'hi') {
+        res.status(400).json({ success: false, error: 'Language must be "en" or "hi"' });
+        return;
+      }
+      const updated = await dbService.updateCustomerLanguageById(id, language);
+      if (!updated) {
+        res.status(404).json({ success: false, error: 'Customer not found' });
+        return;
+      }
+      res.json({ success: true, message: `Customer language set to ${language}`, data: updated });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  async pauseBot(req: Request, res: Response): Promise<void> {
+    try {
+      const { customerId } = req.body;
+      if (!customerId) {
+        res.status(400).json({ success: false, error: 'customerId is required' });
+        return;
+      }
+      const updated = await dbService.setBotPaused(customerId, true);
+      res.json({ success: true, message: 'Bot paused for customer (human handoff)', data: updated });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  async sendCustomerMessage(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { text } = req.body;
+      if (!text || !text.trim()) {
+        res.status(400).json({ success: false, error: 'Message text is required' });
+        return;
+      }
+
+      const customer = await dbService.findCustomerById(id);
+      if (!customer) {
+        res.status(404).json({ success: false, error: 'Customer not found' });
+        return;
+      }
+
+      const { whatsappService } = await import('../services/whatsapp.service');
+      await whatsappService.sendText(customer.phone, `[Staff Support]: ${text}`);
+
+      res.json({ success: true, message: 'Message sent to customer' });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
   async getMessages(req: Request, res: Response): Promise<void> {
     try {
       const messages = await dbService.listMessages();
@@ -105,20 +186,54 @@ export class AdminController {
   }
 
   async getConfig(req: Request, res: Response): Promise<void> {
-    res.json({ success: true, data: businessConfig });
+    const { envConfig } = await import('../config');
+    res.json({
+      success: true,
+      data: {
+        ...businessConfig,
+        phoneNumberId: envConfig.phoneNumberId,
+        hasLiveToken: Boolean(envConfig.whatsappToken && !envConfig.whatsappToken.startsWith('EAAxxxx'))
+      }
+    });
   }
 
   async updateConfig(req: Request, res: Response): Promise<void> {
     try {
-      const { name, tagline, hours, address, supportPhone, website } = req.body;
-      if (name) businessConfig.name = name;
-      if (tagline) businessConfig.tagline = tagline;
-      if (hours) businessConfig.hours = hours;
-      if (address) businessConfig.address = address;
-      if (supportPhone) businessConfig.supportPhone = supportPhone;
-      if (website) businessConfig.website = website;
+      const { envConfig } = await import('../config');
+      const {
+        name,
+        tagline,
+        category,
+        currency,
+        hours,
+        address,
+        supportPhone,
+        website,
+        defaultLanguage,
+        welcomeMessageEn,
+        welcomeMessageHi,
+        menuItems,
+        whatsappToken,
+        phoneNumberId
+      } = req.body;
 
-      res.json({ success: true, message: 'Business configuration updated', data: businessConfig });
+      if (name !== undefined) businessConfig.name = name;
+      if (tagline !== undefined) businessConfig.tagline = tagline;
+      if (category !== undefined) businessConfig.category = category;
+      if (currency !== undefined) businessConfig.currency = currency;
+      if (hours !== undefined) businessConfig.hours = hours;
+      if (address !== undefined) businessConfig.address = address;
+      if (supportPhone !== undefined) businessConfig.supportPhone = supportPhone;
+      if (website !== undefined) businessConfig.website = website;
+      if (defaultLanguage !== undefined) businessConfig.defaultLanguage = defaultLanguage;
+      if (welcomeMessageEn !== undefined) businessConfig.welcomeMessageEn = welcomeMessageEn;
+      if (welcomeMessageHi !== undefined) businessConfig.welcomeMessageHi = welcomeMessageHi;
+      if (menuItems !== undefined && Array.isArray(menuItems)) businessConfig.menuItems = menuItems;
+      if (whatsappToken !== undefined) envConfig.whatsappToken = whatsappToken.trim();
+      if (phoneNumberId !== undefined) envConfig.phoneNumberId = phoneNumberId.trim();
+
+      logger.info('Business configuration, credentials and menu updated via Admin API', { name: businessConfig.name });
+      res.json({ success: true, message: 'Business configuration and menu updated successfully', data: businessConfig });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }

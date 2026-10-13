@@ -1,5 +1,5 @@
+import 'dotenv/config';
 import express, { Request, Response } from 'express';
-import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import webhookRouter from './src/routes/webhook.routes';
@@ -7,8 +7,6 @@ import adminRouter from './src/routes/admin.routes';
 import { envConfig } from './src/config';
 import { logger } from './src/utils/logger';
 import { whatsappService, OutgoingLog } from './src/services/whatsapp.service';
-
-dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

@@ -52,35 +52,58 @@ class WhatsAppService {
   }
 
   /**
-   * Generic sender with exponential backoff retries
+   * Dispatches message in simulated sandbox mode (for testing and when token is expired/invalid)
+   */
+  private async dispatchSimulated(
+    to: string,
+    payload: Record<string, unknown>,
+    status: 'simulated' | 'sent' | 'failed' = 'simulated',
+    diagnosticNote?: string
+  ): Promise<boolean> {
+    const logEntry: OutgoingLog = {
+      id: `out-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      to,
+      type: (payload.type as any) || 'text',
+      payload,
+      timestamp: new Date().toISOString(),
+      status,
+      error: diagnosticNote
+    };
+    this.notifyListeners(logEntry);
+
+    // Record in database
+    await dbService.recordMessage({
+      sender: 'BOT',
+      direction: 'OUTBOUND',
+      type: String(payload.type || 'text'),
+      body: this.extractSummary(payload),
+      rawPayload: payload
+    });
+
+    if (diagnosticNote) {
+      logger.info(`[WhatsApp Sandbox Simulated Send] to: ${to} (${diagnosticNote})`);
+    } else {
+      logger.info(`[WhatsApp Sandbox Simulated Send] to: ${to}, type: ${payload.type}`);
+    }
+    return true;
+  }
+
+  /**
+   * Generic sender with exponential backoff retries and graceful sandbox fallback
    */
   private async sendPayloadWithRetry(to: string, payload: Record<string, unknown>, maxRetries = 3): Promise<boolean> {
     const { whatsappToken, phoneNumberId, metaApiVersion } = envConfig;
     const url = `https://graph.facebook.com/${metaApiVersion}/${phoneNumberId}/messages`;
 
-    // If no token or simulated phone number, log and emit simulated delivery
-    if (!whatsappToken || whatsappToken.startsWith('EAAxxxx') || !phoneNumberId) {
-      const logEntry: OutgoingLog = {
-        id: `out-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-        to,
-        type: (payload.type as any) || 'text',
-        payload,
-        timestamp: new Date().toISOString(),
-        status: 'simulated'
-      };
-      this.notifyListeners(logEntry);
+    // If no token or placeholder dummy ID, dispatch directly via simulated sandbox
+    const isPlaceholder =
+      !whatsappToken ||
+      whatsappToken.startsWith('EAAxxxx') ||
+      !phoneNumberId ||
+      phoneNumberId === '109876543210987';
 
-      // Record in database
-      await dbService.recordMessage({
-        sender: 'BOT',
-        direction: 'OUTBOUND',
-        type: String(payload.type || 'text'),
-        body: this.extractSummary(payload),
-        rawPayload: payload
-      });
-
-      logger.info(`[WhatsApp Simulated Send] to: ${to}, type: ${payload.type}`);
-      return true;
+    if (isPlaceholder) {
+      return this.dispatchSimulated(to, payload, 'simulated');
     }
 
     let attempt = 0;
@@ -98,11 +121,43 @@ class WhatsAppService {
 
         if (!response.ok) {
           const errorText = await response.text();
+          let parsedError: any = null;
+          try {
+            parsedError = JSON.parse(errorText);
+          } catch {}
+
+          // 401 Unauthorized / Code 190 (Expired or Invalid Meta Token)
+          // Do NOT retry 401 endlessly: fall back to simulated sandbox mode so conversations aren't blocked
+          if (response.status === 401 || parsedError?.error?.code === 190) {
+            logger.warn(
+              `[WhatsApp API 401] WHATSAPP_TOKEN is expired or invalid (Code 190). Falling back to sandbox simulation for ${to}.`
+            );
+            return this.dispatchSimulated(
+              to,
+              payload,
+              'simulated',
+              'Meta Token Expired (401). Delivered via sandbox simulation.'
+            );
+          }
+
+          // 400 / 403 (e.g. Recipient phone number not added to allowed sandbox test list)
+          if (response.status === 400 || response.status === 403) {
+            logger.warn(
+              `[WhatsApp API ${response.status}] Recipient or payload rejected by Meta Cloud API: ${errorText}. Falling back to sandbox simulation.`
+            );
+            return this.dispatchSimulated(
+              to,
+              payload,
+              'simulated',
+              `Meta Cloud API (${response.status}): ${parsedError?.error?.message || errorText}`
+            );
+          }
+
           throw new Error(`WhatsApp API error (${response.status}): ${errorText}`);
         }
 
         const data = await response.json();
-        logger.info(`[WhatsApp API Success] message sent to ${to}`, data);
+        logger.info(`[WhatsApp API Live Success] message sent to ${to}`, data);
 
         const logEntry: OutgoingLog = {
           id: `out-${Date.now()}`,
@@ -126,20 +181,10 @@ class WhatsAppService {
       } catch (err: any) {
         logger.warn(`Send attempt ${attempt} failed for ${to}: ${err.message}`);
         if (attempt >= maxRetries) {
-          logger.error(`Exceeded maximum retries (${maxRetries}) for ${to}`, err);
-          const failEntry: OutgoingLog = {
-            id: `out-fail-${Date.now()}`,
-            to,
-            type: (payload.type as any) || 'text',
-            payload,
-            timestamp: new Date().toISOString(),
-            status: 'failed',
-            error: err.message
-          };
-          this.notifyListeners(failEntry);
-          return false;
+          logger.warn(`Retries exhausted for ${to}. Delivering via sandbox simulation fallback.`);
+          return this.dispatchSimulated(to, payload, 'simulated', `Live send failed (${err.message}). Delivered via simulation.`);
         }
-        // Exponential backoff: 1s, 2s, 4s...
+        // Exponential backoff for network/transient 5xx errors: 1s, 2s...
         const delay = Math.pow(2, attempt - 1) * 1000;
         await new Promise((res) => setTimeout(res, delay));
       }

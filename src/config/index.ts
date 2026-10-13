@@ -4,6 +4,13 @@
  * are centrally configured here.
  */
 
+const getEnv = (key: string, fallback: string = ''): string => {
+  if (typeof process !== 'undefined' && process.env && process.env[key]) {
+    return process.env[key] as string;
+  }
+  return fallback;
+};
+
 export interface MenuItem {
   id: string;
   title: string;
@@ -22,6 +29,8 @@ export interface BusinessConfig {
   supportPhone: string;
   website: string;
   defaultLanguage: 'en' | 'hi';
+  welcomeMessageEn?: string;
+  welcomeMessageHi?: string;
   menuItems: MenuItem[];
 }
 
@@ -35,6 +44,8 @@ export const businessConfig: BusinessConfig = {
   supportPhone: "+91 98765 43210",
   website: "https://spicegardenbistro.example.com",
   defaultLanguage: "en",
+  welcomeMessageEn: "👋 Welcome to *{businessName}*! {tagline}\n\nWe are delighted to serve you. How can we help you today?\n\nType *menu* to explore our offerings or choose an option below.",
+  welcomeMessageHi: "👋 *{businessName}* में आपका स्वागत है! {tagline}\n\nहम आपकी सेवा के लिए तत्पर हैं। आज हम आपकी क्या सहायता कर सकते हैं?\n\nहमारे व्यंजन देखने के लिए *menu* टाइप करें या नीचे दिए गए विकल्पों में से चुनें।",
   menuItems: [
     {
       id: "dish_01",
@@ -110,14 +121,14 @@ export const businessConfig: BusinessConfig = {
 };
 
 export const envConfig = {
-  port: parseInt(process.env.PORT || "3000", 10),
-  whatsappToken: process.env.WHATSAPP_TOKEN || "",
-  phoneNumberId: process.env.PHONE_NUMBER_ID || "",
-  verifyToken: process.env.VERIFY_TOKEN || "my_secure_webhook_verify_token_2026",
-  appSecret: process.env.APP_SECRET || "",
-  ownerPhone: process.env.OWNER_PHONE || "919876543210",
-  adminApiKey: process.env.ADMIN_API_KEY || "wh_admin_secret_key_prod_2026",
-  databaseUrl: process.env.DATABASE_URL || "",
-  redisUrl: process.env.REDIS_URL || "",
-  metaApiVersion: "v21.0"
+  port: parseInt(getEnv('PORT', '3000'), 10),
+  whatsappToken: getEnv('WHATSAPP_TOKEN', ''),
+  phoneNumberId: getEnv('PHONE_NUMBER_ID', ''),
+  verifyToken: getEnv('VERIFY_TOKEN', 'my_secure_webhook_verify_token_2026'),
+  appSecret: getEnv('APP_SECRET', ''),
+  ownerPhone: getEnv('OWNER_PHONE', '919876543210'),
+  adminApiKey: getEnv('ADMIN_API_KEY', 'wh_admin_secret_key_prod_2026'),
+  databaseUrl: getEnv('DATABASE_URL', ''),
+  redisUrl: getEnv('REDIS_URL', ''),
+  metaApiVersion: 'v21.0'
 };

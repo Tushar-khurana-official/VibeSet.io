@@ -157,6 +157,36 @@ class DatabaseService {
     return customer;
   }
 
+  async findCustomerById(id: string): Promise<CustomerModel | null> {
+    for (const cust of this.customers.values()) {
+      if (cust.id === id) return cust;
+    }
+    return null;
+  }
+
+  async updateCustomerOptInById(id: string, optedIn: boolean): Promise<CustomerModel | null> {
+    const customer = await this.findCustomerById(id);
+    if (!customer) return null;
+    customer.optedIn = optedIn;
+    customer.updatedAt = new Date().toISOString();
+    return customer;
+  }
+
+  async updateCustomerLanguageById(id: string, language: 'en' | 'hi'): Promise<CustomerModel | null> {
+    const customer = await this.findCustomerById(id);
+    if (!customer) return null;
+    customer.language = language;
+    customer.updatedAt = new Date().toISOString();
+    return customer;
+  }
+
+  async deleteCustomer(id: string): Promise<boolean> {
+    const customer = await this.findCustomerById(id);
+    if (!customer) return false;
+    this.customers.delete(customer.phone);
+    return true;
+  }
+
   async setCustomerOptIn(phone: string, optedIn: boolean): Promise<CustomerModel | null> {
     const customer = this.customers.get(phone);
     if (!customer) return null;
