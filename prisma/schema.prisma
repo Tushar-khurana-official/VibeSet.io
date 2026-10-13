@@ -15,17 +15,29 @@ enum OrderStatus {
   CANCELLED
 }
 
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
 model Customer {
-  id           String        @id @default(uuid())
-  phone        String        @unique // E.164 phone number, e.g., 919876543210
-  name         String?
-  language     String        @default("en") // "en" | "hi"
-  optedIn      Boolean       @default(true) // STOP sets to false
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  orders       Order[]
-  messages     Message[]
-  conversation Conversation?
+  id            String        @id @default(uuid())
+  phone         String        @unique // E.164 phone number, e.g., 919876543210
+  name          String?
+  language      String        @default("en") // "en" | "hi"
+  optedIn       Boolean       @default(true) // STOP sets to false
+  source        String        @default("customer messaged") // "customer messaged" | "added by owner" | "CSV"
+  consentText   String?
+  consentAt     DateTime?
+  lastInboundAt DateTime?     // Tracks last time customer sent a message for 24-hour window
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  orders        Order[]
+  messages      Message[]
+  conversation  Conversation?
+  campaignRecipients CampaignRecipient[]
 
   @@index([phone])
 }
@@ -64,10 +76,12 @@ model Message {
   messageId   String?  @unique // Meta wa_id / wamid for deduplication (idempotency)
   customerId  String?
   customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  sender      String   // Phone or SYSTEM
+  sender      String   // Phone or SYSTEM / BOT
   direction   String   // "INBOUND" or "OUTBOUND"
   type        String   // "text", "interactive_list", "interactive_button", "template"
   body        String?  // Text content or readable summary
+  status      String   @default("sent") // "sent", "delivered", "read", "failed"
+  errorMessage String?
   rawPayload  Json?    // Complete raw Meta JSON
   createdAt   DateTime @default(now())
 
@@ -88,4 +102,53 @@ model Conversation {
   updatedAt       DateTime  @updatedAt
 
   @@index([customerId])
+}
+
+model Campaign {
+  id             String              @id @default(uuid())
+  name           String
+  templateName   String
+  status         String              @default("DRAFT") // DRAFT, SCHEDULED, PROCESSING, PAUSED, COMPLETED, CANCELLED
+  totalTargeted  Int                 @default(0)
+  sentCount      Int                 @default(0)
+  deliveredCount Int                 @default(0)
+  readCount      Int                 @default(0)
+  failedCount    Int                 @default(0)
+  scheduledAt    DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  recipients     CampaignRecipient[]
+}
+
+model CampaignRecipient {
+  id           String    @id @default(uuid())
+  campaignId   String
+  campaign     Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  customerId   String?
+  customer     Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  phone        String
+  status       String    @default("PENDING") // PENDING, SENT, DELIVERED, READ, FAILED
+  errorMessage String?
+  sentAt       DateTime?
+  updatedAt    DateTime  @updatedAt
+
+  @@index([campaignId])
+  @@index([phone])
+}
+
+model TemplateCache {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  category    String   // MARKETING, UTILITY
+  language    String   // en_US, hi
+  status      String   // APPROVED, PENDING, REJECTED
+  components  Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model AppSettings {
+  id        String   @id @default("default")
+  data      Json
+  updatedAt DateTime @updatedAt
 }

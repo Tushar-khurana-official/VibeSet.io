@@ -28,8 +28,36 @@ export interface OutgoingLog {
   error?: string;
 }
 
+export interface DetailedSendResult {
+  success: boolean;
+  mode: 'simulator' | 'live';
+  status: 'sent' | 'simulated' | 'delivered' | 'failed';
+  messageId?: string;
+  error?: string;
+  warning?: string;
+}
+
+export interface SendMessageOptions {
+  mode?: 'simulator' | 'live';
+  type: 'text' | 'template';
+  text?: string;
+  templateName?: string;
+  languageCode?: string;
+  components?: any[];
+}
+
 class WhatsAppService {
   private listeners: Array<(log: OutgoingLog) => void> = [];
+  private mode: 'simulator' | 'live' = 'simulator';
+
+  getMode(): 'simulator' | 'live' {
+    return this.mode;
+  }
+
+  setMode(newMode: 'simulator' | 'live'): void {
+    this.mode = newMode;
+    logger.info(`WhatsApp Service dispatch mode switched to: ${newMode}`);
+  }
 
   /**
    * Register a listener for sent messages (used by UI Simulator)
@@ -77,6 +105,7 @@ class WhatsAppService {
       direction: 'OUTBOUND',
       type: String(payload.type || 'text'),
       body: this.extractSummary(payload),
+      status,
       rawPayload: payload
     });
 
@@ -174,6 +203,7 @@ class WhatsAppService {
           direction: 'OUTBOUND',
           type: String(payload.type || 'text'),
           body: this.extractSummary(payload),
+          status: 'sent',
           rawPayload: payload
         });
 
@@ -334,8 +364,173 @@ class WhatsAppService {
         ...(components ? { components } : {})
       }
     };
-
     return this.sendPayloadWithRetry(to, payload);
+  }
+
+  /**
+   * Send a WhatsApp message with explicit mode (Live WhatsApp API vs Simulator)
+   * Handles both Template and Free Text messages, and catches Meta errors (e.g. #131030 recipient not in sandbox list).
+   */
+  async sendMessage(to: string, options: SendMessageOptions): Promise<DetailedSendResult> {
+    const targetMode = options.mode || this.mode;
+
+    // Construct the WhatsApp payload
+    let payload: Record<string, unknown>;
+    if (options.type === 'template') {
+      payload = {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'template',
+        template: {
+          name: options.templateName,
+          language: { code: options.languageCode || 'en_US' },
+          ...(options.components && options.components.length > 0 ? { components: options.components } : {})
+        }
+      };
+    } else {
+      payload = {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'text',
+        text: {
+          preview_url: false,
+          body: options.text || ''
+        }
+      };
+    }
+
+    // 1. Simulator Mode: No external API call
+    if (targetMode === 'simulator') {
+      const summary = options.type === 'template' ? `[Template: ${options.templateName}]` : options.text || '';
+      const simulatedMsg = await dbService.recordMessage({
+        sender: 'OWNER',
+        direction: 'OUTBOUND',
+        type: options.type,
+        body: summary,
+        status: 'simulated',
+        rawPayload: payload
+      });
+
+      const logEntry: OutgoingLog = {
+        id: simulatedMsg.id,
+        to,
+        type: options.type === 'template' ? 'template' : 'text',
+        payload,
+        timestamp: new Date().toISOString(),
+        status: 'simulated'
+      };
+      this.notifyListeners(logEntry);
+
+      return {
+        success: true,
+        mode: 'simulator',
+        status: 'simulated',
+        messageId: simulatedMsg.id
+      };
+    }
+
+    // 2. Live WhatsApp Cloud API Mode
+    const { whatsappToken, phoneNumberId, metaApiVersion } = envConfig;
+    if (!whatsappToken || !phoneNumberId || whatsappToken.startsWith('EAAxxxx')) {
+      return {
+        success: false,
+        mode: 'live',
+        status: 'failed',
+        error: 'Meta Cloud API credentials are not configured. Please add WHATSAPP_TOKEN and PHONE_NUMBER_ID in .env or Settings.'
+      };
+    }
+
+    const url = `https://graph.facebook.com/${metaApiVersion}/${phoneNumberId}/messages`;
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${whatsappToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const responseText = await response.text();
+      let parsed: any = null;
+      try {
+        parsed = JSON.parse(responseText);
+      } catch {}
+
+      if (!response.ok) {
+        let userFriendlyError = `Meta API Error (${response.status}): ${parsed?.error?.message || responseText}`;
+        const errorCode = parsed?.error?.code;
+
+        // Detect Meta error #131030 (Recipient phone number not in allowed list for free test number)
+        if (errorCode === 131030 || responseText.includes('131030') || responseText.includes('allowed list')) {
+          userFriendlyError = `Recipient (+${to}) is not in your Meta test number allowed list. Add this number under Meta > WhatsApp > API Setup > To.`;
+        } else if (response.status === 401 || errorCode === 190) {
+          userFriendlyError = `Authentication Error: WHATSAPP_TOKEN is invalid or expired. Update token in Settings or .env.`;
+        }
+
+        // Record failed message in database
+        await dbService.recordMessage({
+          sender: 'OWNER',
+          direction: 'OUTBOUND',
+          type: options.type,
+          body: options.type === 'template' ? `[Template: ${options.templateName}]` : options.text || '',
+          status: 'failed',
+          errorMessage: userFriendlyError,
+          rawPayload: payload
+        });
+
+        logger.error(`Live WhatsApp send failed to ${to}`, undefined, { error: userFriendlyError, raw: parsed });
+
+        return {
+          success: false,
+          mode: 'live',
+          status: 'failed',
+          error: userFriendlyError
+        };
+      }
+
+      // Success
+      const messageId = parsed?.messages?.[0]?.id || `wamid.LIVE_${Date.now()}`;
+      await dbService.recordMessage({
+        messageId,
+        sender: 'OWNER',
+        direction: 'OUTBOUND',
+        type: options.type,
+        body: options.type === 'template' ? `[Template: ${options.templateName}]` : options.text || '',
+        status: 'sent',
+        rawPayload: payload
+      });
+
+      const logEntry: OutgoingLog = {
+        id: messageId,
+        to,
+        type: options.type === 'template' ? 'template' : 'text',
+        payload,
+        timestamp: new Date().toISOString(),
+        status: 'sent'
+      };
+      this.notifyListeners(logEntry);
+
+      logger.info(`Live WhatsApp message sent successfully to ${to} (${messageId})`);
+
+      return {
+        success: true,
+        mode: 'live',
+        status: 'sent',
+        messageId
+      };
+    } catch (err: any) {
+      logger.error(`Live WhatsApp network error to ${to}`, err);
+      return {
+        success: false,
+        mode: 'live',
+        status: 'failed',
+        error: `Network error connecting to Meta Graph API: ${err.message}`
+      };
+    }
   }
 }
 

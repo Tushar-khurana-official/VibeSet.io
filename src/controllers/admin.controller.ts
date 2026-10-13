@@ -2,14 +2,155 @@ import { Request, Response } from 'express';
 import { dbService, OrderStatus } from '../services/db.service';
 import { orderService } from '../services/order.service';
 import { broadcastService } from '../services/broadcast.service';
-import { businessConfig } from '../config';
+import { businessConfig, envConfig } from '../config';
 import { logger } from '../utils/logger';
 
 export class AdminController {
   async getCustomers(req: Request, res: Response): Promise<void> {
     try {
       const customers = await dbService.listCustomers();
-      res.json({ success: true, count: customers.length, data: customers });
+      // Attach 24h window status to each customer for ease of frontend consumption
+      const enhancedCustomers = customers.map((c) => ({
+        ...c,
+        windowStatus: dbService.is24HourWindowOpen(c)
+      }));
+      res.json({ success: true, count: enhancedCustomers.length, data: enhancedCustomers });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  async createCustomer(req: Request, res: Response): Promise<void> {
+    try {
+      const { phone, name, language = 'en', consentAgreed, consentText, source = 'added by owner' } = req.body;
+      if (!phone) {
+        res.status(400).json({ success: false, error: 'Phone number is required' });
+        return;
+      }
+
+      // E.164 normalization
+      const cleanPhone = String(phone).replace(/\D/g, '').replace(/^0+/, '');
+      if (cleanPhone.length < 8 || cleanPhone.length > 15) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid phone format. Please enter a valid number with country code (8-15 digits).'
+        });
+        return;
+      }
+
+      if (!consentAgreed) {
+        res.status(400).json({
+          success: false,
+          error: 'Consent confirmation is required. You must verify that this person agreed to receive WhatsApp messages.'
+        });
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const customer = await dbService.upsertCustomer(cleanPhone, name ? String(name).trim() : undefined, language as 'en' | 'hi', {
+        source,
+        optedIn: true,
+        consentText: consentText || 'Confirmed agreement to receive business WhatsApp updates',
+        consentAt: now
+      });
+
+      res.json({
+        success: true,
+        message: 'Customer added successfully with recorded consent',
+        data: {
+          ...customer,
+          windowStatus: dbService.is24HourWindowOpen(customer)
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  async importCustomersCSV(req: Request, res: Response): Promise<void> {
+    try {
+      const { rows } = req.body;
+      if (!Array.isArray(rows) || rows.length === 0) {
+        res.status(400).json({ success: false, error: 'CSV data is empty or invalid' });
+        return;
+      }
+
+      let importedCount = 0;
+      let skippedNoConsent = 0;
+      let skippedInvalidPhone = 0;
+      const importedList: any[] = [];
+
+      for (const row of rows) {
+        const rawPhone = row.phone ? String(row.phone).trim() : '';
+        const cleanPhone = rawPhone.replace(/\D/g, '').replace(/^0+/, '');
+
+        // 1. Phone validation
+        if (!cleanPhone || cleanPhone.length < 8 || cleanPhone.length > 15) {
+          skippedInvalidPhone++;
+          continue;
+        }
+
+        // 2. Consent validation (must have non-empty consent_date or consent flag)
+        const consentVal = row.consent_date || row.consent;
+        if (!consentVal || String(consentVal).trim() === '' || String(consentVal).toLowerCase() === 'false') {
+          skippedNoConsent++;
+          continue;
+        }
+
+        let consentDate = new Date().toISOString();
+        if (typeof consentVal === 'string' && !isNaN(Date.parse(consentVal))) {
+          consentDate = new Date(consentVal).toISOString();
+        }
+
+        const lang = row.language && String(row.language).toLowerCase().includes('hi') ? 'hi' : 'en';
+        const name = row.name ? String(row.name).trim() : undefined;
+
+        const customer = await dbService.upsertCustomer(cleanPhone, name, lang, {
+          source: 'CSV',
+          optedIn: true,
+          consentText: `Imported via CSV with consent recorded (${consentVal})`,
+          consentAt: consentDate
+        });
+
+        importedCount++;
+        importedList.push(customer);
+      }
+
+      res.json({
+        success: true,
+        message: `${importedCount} imported, ${skippedNoConsent} skipped (no consent), ${skippedInvalidPhone} skipped (invalid phone)`,
+        stats: {
+          importedCount,
+          skippedNoConsent,
+          skippedInvalidPhone,
+          total: rows.length
+        },
+        data: importedList
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  async simulateInboundMessage(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const customer = await dbService.findCustomerById(id);
+      if (!customer) {
+        res.status(404).json({ success: false, error: 'Customer not found' });
+        return;
+      }
+
+      await dbService.recordInboundCustomerMessage(customer.phone, customer.name || undefined);
+      const updated = await dbService.findCustomerById(id);
+      const windowStatus = dbService.is24HourWindowOpen(updated);
+
+      res.json({
+        success: true,
+        message: `Simulated inbound message from ${customer.phone}. 24-hour window is now OPEN!`,
+        data: updated,
+        windowStatus
+      });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -81,15 +222,61 @@ export class AdminController {
     }
   }
 
+  async pauseBot(req: Request, res: Response): Promise<void> {
+    try {
+      const { customerId, phone } = req.body;
+      let targetCustomerId = customerId;
+
+      if (!targetCustomerId && phone) {
+        const customer = await dbService.findCustomerByPhone(phone);
+        if (customer) targetCustomerId = customer.id;
+      }
+
+      if (!targetCustomerId) {
+        res.status(400).json({ success: false, error: 'customerId or phone is required' });
+        return;
+      }
+
+      const updated = await dbService.setBotPaused(targetCustomerId, true);
+      res.json({ success: true, message: 'Bot paused for customer (human handoff)', data: updated });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
   async triggerBroadcast(req: Request, res: Response): Promise<void> {
     try {
-      const { templateName = 'seasonal_offer', language = 'en_US', delayMs = 600 } = req.body;
+      const {
+        templateName = 'seasonal_offer',
+        language = 'en_US',
+        delayMs = 500,
+        filterSource,
+        consentAfterDate,
+        languageFilter,
+        variables,
+        mode
+      } = req.body;
+
       const result = await broadcastService.sendBroadcast({
         templateName,
         language,
-        delayMs
+        delayMs,
+        filterSource,
+        consentAfterDate,
+        languageFilter,
+        variables,
+        mode
       });
       res.json({ success: true, message: 'Broadcast completed', data: result });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  async getBroadcastProgress(req: Request, res: Response): Promise<void> {
+    try {
+      const progress = broadcastService.getProgress();
+      res.json({ success: true, data: progress });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -138,16 +325,204 @@ export class AdminController {
     }
   }
 
-  async pauseBot(req: Request, res: Response): Promise<void> {
+  async getMode(req: Request, res: Response): Promise<void> {
+    const { whatsappService } = await import('../services/whatsapp.service');
+    res.json({ success: true, mode: whatsappService.getMode() });
+  }
+
+  async setMode(req: Request, res: Response): Promise<void> {
+    const { mode } = req.body;
+    if (mode !== 'simulator' && mode !== 'live') {
+      res.status(400).json({ success: false, error: 'Mode must be either "simulator" or "live"' });
+      return;
+    }
+    const { whatsappService } = await import('../services/whatsapp.service');
+    whatsappService.setMode(mode);
+    res.json({ success: true, message: `Switched mode to ${mode}`, mode });
+  }
+
+  async getWhatsAppStatus(req: Request, res: Response): Promise<void> {
+    const { whatsappToken, phoneNumberId, metaApiVersion } = envConfig;
+    const { whatsappService } = await import('../services/whatsapp.service');
+    const currentMode = whatsappService.getMode();
+
+    if (!whatsappToken || whatsappToken.startsWith('EAAxxxx') || !phoneNumberId || phoneNumberId === '109876543210987') {
+      res.json({
+        success: true,
+        configured: false,
+        connected: false,
+        mode: currentMode,
+        phoneNumberId: phoneNumberId || 'Not Configured',
+        message: 'Meta Cloud API is running with simulated sandbox credentials. Live sends require a valid WHATSAPP_TOKEN.'
+      });
+      return;
+    }
+
     try {
-      const { customerId } = req.body;
-      if (!customerId) {
-        res.status(400).json({ success: false, error: 'customerId is required' });
+      const url = `https://graph.facebook.com/${metaApiVersion}/${phoneNumberId}`;
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${whatsappToken}`
+        }
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        const isExpired = response.status === 401 || data?.error?.code === 190;
+        res.json({
+          success: true,
+          configured: true,
+          connected: false,
+          isExpired,
+          errorCode: data?.error?.code || response.status,
+          errorType: data?.error?.type || 'OAuthException',
+          error: data?.error?.message || 'Failed to authenticate with Meta WhatsApp API',
+          phoneNumberId,
+          mode: currentMode
+        });
         return;
       }
-      const updated = await dbService.setBotPaused(customerId, true);
-      res.json({ success: true, message: 'Bot paused for customer (human handoff)', data: updated });
+
+      res.json({
+        success: true,
+        configured: true,
+        connected: true,
+        phoneNumberId,
+        displayPhoneNumber: data.display_phone_number,
+        verifiedName: data.verified_name,
+        qualityRating: data.quality_rating,
+        mode: currentMode
+      });
     } catch (err: any) {
+      res.json({
+        success: true,
+        configured: true,
+        connected: false,
+        error: `Network error connecting to Meta Graph API: ${err.message}`,
+        phoneNumberId,
+        mode: currentMode
+      });
+    }
+  }
+
+  async sendDirectMessage(req: Request, res: Response): Promise<void> {
+    try {
+      const {
+        phone,
+        name,
+        type = 'text',
+        text,
+        templateName = 'hello_world',
+        languageCode = 'en_US',
+        variables,
+        mode
+      } = req.body;
+
+      if (!phone) {
+        res.status(400).json({ success: false, error: 'Phone number is required' });
+        return;
+      }
+
+      // E.164 normalization: strip spaces, +, dashes, brackets, and leading zeros
+      const cleanPhone = String(phone).replace(/\D/g, '').replace(/^0+/, '');
+      if (cleanPhone.length < 8 || cleanPhone.length > 15) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid phone format. Please enter a valid number with country code (e.g. 919876543210).'
+        });
+        return;
+      }
+
+      // Find or auto-create customer
+      let customer = await dbService.findCustomerByPhone(cleanPhone);
+      if (!customer) {
+        customer = await dbService.upsertCustomer(cleanPhone, name ? String(name).trim() : undefined, 'en', {
+          source: 'added by owner',
+          optedIn: true,
+          consentText: 'Added directly by business owner from dashboard'
+        });
+      } else if (name && !customer.name) {
+        customer = await dbService.upsertCustomer(cleanPhone, String(name).trim());
+      }
+
+      const windowStatus = dbService.is24HourWindowOpen(customer);
+
+      // Strict Compliance: Enforce 24-hour customer window for free-form text
+      if (type === 'text') {
+        if (!text || !text.trim()) {
+          res.status(400).json({ success: false, error: 'Message text cannot be empty' });
+          return;
+        }
+
+        if (!windowStatus.isOpen) {
+          res.status(400).json({
+            success: false,
+            error: '24-hour window closed. Send an approved template instead.',
+            windowStatus
+          });
+          return;
+        }
+      } else if (type === 'template') {
+        if (!templateName) {
+          res.status(400).json({ success: false, error: 'Template name is required' });
+          return;
+        }
+
+        if (!customer.optedIn) {
+          res.status(400).json({
+            success: false,
+            error: 'Customer has opted out (STOP). Cannot message unsubscribed users per compliance regulations.'
+          });
+          return;
+        }
+      }
+
+      // Format template variables if provided
+      let components: any[] | undefined = undefined;
+      if (type === 'template' && Array.isArray(variables) && variables.length > 0) {
+        components = [
+          {
+            type: 'body',
+            parameters: variables.map((v: string) => ({
+              type: 'text',
+              text: String(v)
+            }))
+          }
+        ];
+      }
+
+      const { whatsappService } = await import('../services/whatsapp.service');
+      const sendResult = await whatsappService.sendMessage(cleanPhone, {
+        mode,
+        type,
+        text: text ? text.trim() : undefined,
+        templateName,
+        languageCode,
+        components
+      });
+
+      if (!sendResult.success) {
+        res.status(400).json({
+          success: false,
+          mode: sendResult.mode,
+          status: sendResult.status,
+          error: sendResult.error,
+          customer,
+          windowStatus
+        });
+        return;
+      }
+
+      res.json({
+        success: true,
+        mode: sendResult.mode,
+        status: sendResult.status,
+        messageId: sendResult.messageId,
+        customer,
+        windowStatus
+      });
+    } catch (err: any) {
+      logger.error('Failed to send direct message', err);
       res.status(500).json({ success: false, error: err.message });
     }
   }
@@ -155,11 +530,7 @@ export class AdminController {
   async sendCustomerMessage(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const { text } = req.body;
-      if (!text || !text.trim()) {
-        res.status(400).json({ success: false, error: 'Message text is required' });
-        return;
-      }
+      const { text, type = 'text', templateName = 'hello_world', mode } = req.body;
 
       const customer = await dbService.findCustomerById(id);
       if (!customer) {
@@ -167,10 +538,38 @@ export class AdminController {
         return;
       }
 
-      const { whatsappService } = await import('../services/whatsapp.service');
-      await whatsappService.sendText(customer.phone, `[Staff Support]: ${text}`);
+      const windowStatus = dbService.is24HourWindowOpen(customer);
 
-      res.json({ success: true, message: 'Message sent to customer' });
+      if (type === 'text') {
+        if (!text || !text.trim()) {
+          res.status(400).json({ success: false, error: 'Message text is required' });
+          return;
+        }
+
+        if (!windowStatus.isOpen) {
+          res.status(400).json({
+            success: false,
+            error: '24-hour window closed. Send an approved template instead.',
+            windowStatus
+          });
+          return;
+        }
+      }
+
+      const { whatsappService } = await import('../services/whatsapp.service');
+      const sendResult = await whatsappService.sendMessage(customer.phone, {
+        mode,
+        type,
+        text: text ? `[Staff Support]: ${text.trim()}` : undefined,
+        templateName
+      });
+
+      if (!sendResult.success) {
+        res.status(400).json({ success: false, error: sendResult.error, status: sendResult.status });
+        return;
+      }
+
+      res.json({ success: true, message: 'Message sent to customer', result: sendResult, windowStatus });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -186,7 +585,6 @@ export class AdminController {
   }
 
   async getConfig(req: Request, res: Response): Promise<void> {
-    const { envConfig } = await import('../config');
     res.json({
       success: true,
       data: {
@@ -199,7 +597,6 @@ export class AdminController {
 
   async updateConfig(req: Request, res: Response): Promise<void> {
     try {
-      const { envConfig } = await import('../config');
       const {
         name,
         tagline,

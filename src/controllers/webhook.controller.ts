@@ -57,7 +57,19 @@ export class WebhookController {
 
             const messages = value.messages;
             const contacts = value.contacts;
+            const statuses = value.statuses;
             const senderName = Array.isArray(contacts) && contacts[0]?.profile?.name ? contacts[0].profile.name : undefined;
+
+            // Handle Meta message delivery & read receipt status updates
+            if (Array.isArray(statuses)) {
+              for (const st of statuses) {
+                const messageId = st.id;
+                const statusStr = st.status; // sent, delivered, read, failed
+                const errorMsg = st.errors && st.errors[0] ? `${st.errors[0].code}: ${st.errors[0].title || st.errors[0].message}` : undefined;
+                dbService.updateMessageStatus(messageId, statusStr, errorMsg);
+                logger.info(`Meta message status callback: ${messageId} -> ${statusStr}`, { errorMsg });
+              }
+            }
 
             if (!Array.isArray(messages)) continue;
 
@@ -74,6 +86,9 @@ export class WebhookController {
                 dbService.markMessageProcessed(messageId);
               }
 
+              // Record inbound customer timestamp for 24-hour service window tracking
+              await dbService.recordInboundCustomerMessage(msg.from, senderName);
+
               // Record in message history
               await dbService.recordMessage({
                 messageId,
@@ -81,6 +96,7 @@ export class WebhookController {
                 direction: 'INBOUND',
                 type: msg.type || 'text',
                 body: msg.text?.body || msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || '',
+                status: 'delivered',
                 rawPayload: msg
               });
 

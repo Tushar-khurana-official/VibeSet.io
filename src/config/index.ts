@@ -124,6 +124,8 @@ export const envConfig = {
   port: parseInt(getEnv('PORT', '3000'), 10),
   whatsappToken: getEnv('WHATSAPP_TOKEN', ''),
   phoneNumberId: getEnv('PHONE_NUMBER_ID', ''),
+  whatsappBusinessAccountId: getEnv('WHATSAPP_BUSINESS_ACCOUNT_ID', ''),
+  sendDelayMs: parseInt(getEnv('SEND_DELAY_MS', '1000'), 10),
   verifyToken: getEnv('VERIFY_TOKEN', 'my_secure_webhook_verify_token_2026'),
   appSecret: getEnv('APP_SECRET', ''),
   ownerPhone: getEnv('OWNER_PHONE', '919876543210'),

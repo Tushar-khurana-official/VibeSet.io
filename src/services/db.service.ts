@@ -8,6 +8,10 @@ export interface CustomerModel {
   name: string | null;
   language: 'en' | 'hi';
   optedIn: boolean;
+  source: string; // 'customer messaged' | 'added by owner' | 'CSV'
+  consentText?: string | null;
+  consentAt?: string | null;
+  lastInboundAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -44,6 +48,8 @@ export interface MessageModel {
   direction: 'INBOUND' | 'OUTBOUND';
   type: string;
   body: string;
+  status: 'sent' | 'delivered' | 'read' | 'failed' | 'simulated';
+  errorMessage?: string;
   rawPayload?: Record<string, unknown>;
   createdAt: string;
 }
@@ -81,6 +87,10 @@ class DatabaseService {
       name: "Tushar K",
       language: "en",
       optedIn: true,
+      source: "customer messaged",
+      consentText: "Agreed to receive WhatsApp updates upon ordering",
+      consentAt: new Date(Date.now() - 3600000 * 5).toISOString(),
+      lastInboundAt: new Date(Date.now() - 3600000 * 2).toISOString(), // 2h ago -> 24h window OPEN (22h left)
       createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -126,7 +136,67 @@ class DatabaseService {
     return this.customers.get(phone) || null;
   }
 
-  async upsertCustomer(phone: string, name?: string, language: 'en' | 'hi' = 'en'): Promise<CustomerModel> {
+  is24HourWindowOpen(customer: CustomerModel | null | undefined): {
+    isOpen: boolean;
+    timeLeftFormatted: string;
+    hoursLeft: number;
+    minutesLeft: number;
+  } {
+    if (!customer?.lastInboundAt) {
+      return { isOpen: false, timeLeftFormatted: 'Closed (no inbound msg)', hoursLeft: 0, minutesLeft: 0 };
+    }
+    const diffMs = Date.now() - new Date(customer.lastInboundAt).getTime();
+    const windowMs = 24 * 60 * 60 * 1000;
+    if (diffMs > windowMs) {
+      return { isOpen: false, timeLeftFormatted: 'Closed (expired)', hoursLeft: 0, minutesLeft: 0 };
+    }
+    const remainingMs = windowMs - diffMs;
+    const hours = Math.floor(remainingMs / (1000 * 60 * 60));
+    const mins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+    return {
+      isOpen: true,
+      timeLeftFormatted: `${hours}h ${mins}m left`,
+      hoursLeft: hours,
+      minutesLeft: mins
+    };
+  }
+
+  async recordInboundCustomerMessage(phone: string, senderName?: string): Promise<CustomerModel> {
+    const now = new Date().toISOString();
+    let customer = this.customers.get(phone);
+    if (!customer) {
+      customer = {
+        id: `cust-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        phone,
+        name: senderName || null,
+        language: 'en',
+        optedIn: true,
+        source: 'customer messaged',
+        lastInboundAt: now,
+        createdAt: now,
+        updatedAt: now
+      };
+    } else {
+      if (senderName && !customer.name) customer.name = senderName;
+      customer.lastInboundAt = now;
+      customer.updatedAt = now;
+    }
+    this.customers.set(phone, customer);
+    return customer;
+  }
+
+  async upsertCustomer(
+    phone: string,
+    name?: string,
+    language: 'en' | 'hi' = 'en',
+    extra?: {
+      source?: string;
+      consentText?: string;
+      consentAt?: string;
+      lastInboundAt?: string;
+      optedIn?: boolean;
+    }
+  ): Promise<CustomerModel> {
     let customer = this.customers.get(phone);
     const now = new Date().toISOString();
 
@@ -136,13 +206,22 @@ class DatabaseService {
         phone,
         name: name || null,
         language,
-        optedIn: true,
+        optedIn: extra?.optedIn ?? true,
+        source: extra?.source || 'added by owner',
+        consentText: extra?.consentText || null,
+        consentAt: extra?.consentAt || null,
+        lastInboundAt: extra?.lastInboundAt || null,
         createdAt: now,
         updatedAt: now
       };
       this.customers.set(phone, customer);
     } else {
       if (name && !customer.name) customer.name = name;
+      if (extra?.source) customer.source = extra.source;
+      if (extra?.consentText) customer.consentText = extra.consentText;
+      if (extra?.consentAt) customer.consentAt = extra.consentAt;
+      if (extra?.lastInboundAt) customer.lastInboundAt = extra.lastInboundAt;
+      if (extra?.optedIn !== undefined) customer.optedIn = extra.optedIn;
       customer.updatedAt = now;
       this.customers.set(phone, customer);
     }
@@ -300,6 +379,27 @@ class DatabaseService {
 
   async listMessages(): Promise<MessageModel[]> {
     return [...this.messages].reverse();
+  }
+
+  updateMessageStatus(
+    messageId: string,
+    status: 'sent' | 'delivered' | 'read' | 'failed',
+    errorMessage?: string
+  ): MessageModel | null {
+    for (const msg of this.messages) {
+      if (msg.messageId === messageId || msg.id === messageId) {
+        msg.status = status;
+        if (errorMessage) msg.errorMessage = errorMessage;
+        return msg;
+      }
+    }
+    return null;
+  }
+
+  async getMessagesByCustomerPhone(phone: string): Promise<MessageModel[]> {
+    return this.messages.filter(
+      (m) => m.sender === phone || (m.rawPayload && (m.rawPayload as any).to === phone)
+    );
   }
 
   // --- Conversation & Human Handoff ---
